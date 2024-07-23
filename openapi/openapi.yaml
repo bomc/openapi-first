@@ -69,15 +69,15 @@ servers:
   - url: https://example.com/api/v1
 paths:
   '/users/{username}':
-    $ref: 'paths/users_{username}.yaml'
+    $ref: 'paths/redocUsers_{username}.yaml'
   '/user':
-    $ref: 'paths/user.yaml'
+    $ref: 'paths/redocUser.yaml'
   '/user/list':
-    $ref: 'paths/user-status.yaml'
+    $ref: 'paths/redocUser-status.yaml'
   /pathItem:
-    $ref: paths/pathItem.yaml
+    $ref: paths/redocPathItem.yaml
   /pathItemWithExamples:
-    $ref: paths/pathItemWithExamples.yaml
+    $ref: paths/redocPathItemWithExamples.yaml
 components:
   securitySchemes:
     main_auth:
@@ -109,7 +109,7 @@ webhooks:
         content:
           application/json:
             schema:
-              $ref: 'components/schemas/User.yaml'
+              $ref: 'components/schemas/Redoc-User.yaml'
       responses:
         '200':
           description: "Successfully retrieved information about a new user."
