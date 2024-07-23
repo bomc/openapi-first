@@ -45,16 +45,16 @@ get:
       content:
         application/json:
           schema:
-            $ref: '../components/schemas/User.yaml'
+            $ref: '../components/schemas/Redoc-User.yaml'
           example:
             username: 'user1'
             email: 'user@example.com'
     '403':
       description: Forbidden
-      $ref: ../components/responses/Problem.yaml
+      $ref: ../components/responses/Redoc-Problem.yaml
     '404':
       description: User not found
-      $ref: ../components/responses/Problem.yaml
+      $ref: ../components/responses/Redoc-Problem.yaml
 put:
   tags:
     - User
@@ -75,10 +75,10 @@ put:
     content:
       application/json:
         schema:
-          $ref: '../components/schemas/User.yaml'
+          $ref: '../components/schemas/Redoc-User.yaml'
       application/xml:
         schema:
-          $ref: '../components/schemas/User.yaml'
+          $ref: '../components/schemas/Redoc-User.yaml'
     description: Updated user object
     required: true
   responses:
@@ -91,10 +91,10 @@ put:
             message: OK
     '400':
       description: Invalid username supplied
-      $ref: ../components/responses/Problem.yaml
+      $ref: ../components/responses/Redoc-Problem.yaml
     '404':
       description: User not found
-      $ref: ../components/responses/Problem.yaml
+      $ref: ../components/responses/Redoc-Problem.yaml
     '405':
       description: Method not allowed
       content:

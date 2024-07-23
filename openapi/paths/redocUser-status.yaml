@@ -32,12 +32,12 @@ get:
           schema:
             type: array
             items:
-              $ref: '../components/schemas/User.yaml'
+              $ref: '../components/schemas/Redoc-User.yaml'
         application/xml:
           schema:
             type: array
             items:
-              $ref: '../components/schemas/User.yaml'
+              $ref: '../components/schemas/Redoc-User.yaml'
         text/plain:
           examples:
             response:

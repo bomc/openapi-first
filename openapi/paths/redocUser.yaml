@@ -36,11 +36,11 @@ post:
             discriminator:
               propertyName: userType
               mapping:
-                admin: '../components/schemas/Admin.yaml'
-                basic: '../components/schemas/Basic.yaml'
+                admin: '../components/schemas/Redoc-Admin.yaml'
+                basic: '../components/schemas/Redoc-Basic.yaml'
             anyOf:
-              - $ref: '../components/schemas/Admin.yaml'
-              - $ref: '../components/schemas/Basic.yaml'
+              - $ref: '../components/schemas/Redoc-Admin.yaml'
+              - $ref: '../components/schemas/Redoc-Basic.yaml'
         application/xml:
           schema:
             type: object

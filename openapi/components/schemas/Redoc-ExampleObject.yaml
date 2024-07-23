@@ -3,7 +3,7 @@ properties:
   id:
     description: "User ID."
     allOf:
-      - $ref: './UserID.yaml'
+      - $ref: './Redoc-UserID.yaml'
   name:
     description: "Example name."
     type: string

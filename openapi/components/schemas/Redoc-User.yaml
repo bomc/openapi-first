@@ -5,8 +5,8 @@ required:
 discriminator:
   propertyName: userType
   mapping:
-    admin: './Admin.yaml'
-    basic: './Basic.yaml'
+    admin: './Redoc-Admin.yaml'
+    basic: './Redoc-Basic.yaml'
 properties:
   username:
     description: "The username associated with the user profile."
@@ -26,11 +26,11 @@ properties:
     minLength: 1
     example: Rabbit
   email:
-    $ref: './Email.yaml'
+    $ref: './Redoc-Email.yaml'
   exampleObject:
     description: "Example object to show an expanded schema."
     allOf:
-      - $ref: './ExampleObject.yaml'
+      - $ref: './Redoc-ExampleObject.yaml'
   phone:
     description: "User's phone number. Must be provided in international format."
     type: string
@@ -50,7 +50,7 @@ properties:
     example: ['https://twitter.com/example', 'https://instagram.com/example']
   recursiveProperty:
     allOf:
-      - $ref: './User.yaml'
+      - $ref: './Redoc-User.yaml'
   status:
     description: "Status of the user account."
     type: array
@@ -67,6 +67,6 @@ properties:
       description: Example of external documentation link
       url: 'https://example.com'
     allOf:
-      - $ref: './UserID.yaml'
+      - $ref: './Redoc-UserID.yaml'
 xml:
   name: User
