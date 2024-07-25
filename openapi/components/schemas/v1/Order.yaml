@@ -1,0 +1,25 @@
+type: object  
+properties: 
+  id: 
+    type: string
+    format: uuid
+    description: The unique identifier of the order
+  customer:
+    $ref: OrderCustomer.yaml
+  orderStatus:
+    type: string
+  shipmentInfo:
+    type: string
+  orderLines:
+    type: array
+    items:
+      $ref: OrderLine.yaml
+    description: The order lines of the order.
+  dateCreated:
+    type: string
+    format: date-time
+    description: The date the image was created.
+  dateUpdated:
+    type: string
+    format: date-time
+    description: The date the image was updated.

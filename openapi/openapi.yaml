@@ -44,6 +44,12 @@ externalDocs:
   description: "Find out how to create a GitHub repo for your OpenAPI definition."
   url: 'https://github.com/Redocly/create-openapi-repo'
 tags:
+  - name: Customer
+    description: "Customer operations."
+  - name: Products
+    description: "Product operations."
+  # end bomc
+  # start redoc
   - name: User
     description: "Example actions on user accounts."
   - name: Admin
@@ -68,6 +74,20 @@ servers:
         description: Your tenant id
   - url: https://example.com/api/v1
 paths:
+  '/v1/customers':
+    $ref: 'paths/v1/customers.yaml'
+  '/v1/customers/{customer_id}':
+    $ref: 'paths/v1/customers_{customer_id}.yaml'
+  '/v1/products':
+    $ref: 'paths/v1/products.yaml'
+  '/v1/products/{product_id}':
+    $ref: 'paths/v1/products_{product_id}.yaml'
+  '/v1/orders':
+      $ref: paths/v1/orders.yaml
+  '/v1/orders/{order_id}':
+      $ref: paths/v1/orders_{order_id}.yaml 
+  # end bomc
+  # start redoc
   '/users/{username}':
     $ref: 'paths/redocUsers_{username}.yaml'
   '/user':
@@ -78,8 +98,10 @@ paths:
     $ref: paths/redocPathItem.yaml
   /pathItemWithExamples:
     $ref: paths/redocPathItemWithExamples.yaml
+security: 
+  -  basic_auth: []  
 components:
-  securitySchemes:
+   securitySchemes:
     main_auth:
       description: "Example description text of the OAuth2 scheme."
       type: oauth2

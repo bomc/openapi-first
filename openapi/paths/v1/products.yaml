@@ -1,0 +1,22 @@
+get: 
+  tags: 
+    -  Products
+  summary: Get a list of products
+  description: Get a list of product.
+  operationId: listProducts
+  responses: 
+    '200': 
+      description: Success
+      content: 
+        application/json: 
+          schema: 
+            $ref: ../../components/schemas/v1/ProductList.yaml  
+    '403':
+      description: Forbidden
+      $ref: ../../components/responses/Redoc-Problem.yaml
+    '404': 
+      description: Not Found
+      content: 
+        application/json: 
+          schema: 
+            $ref: ../../components/schemas/Redoc-Problem.yaml    
