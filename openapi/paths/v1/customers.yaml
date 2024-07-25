@@ -1,0 +1,24 @@
+get:
+  tags:
+    - Customers
+  summary: Get a list of customers.
+  description: |
+    Example description of the operation.
+    You can use `markdown` **here**.
+  operationId: listCustomers
+  responses: 
+    '200':
+      description: Success
+      content:
+        application/json:
+          schema:
+            $ref: '../../components/schemas/v1/CustomerList.yaml'
+    '403':
+      description: Forbidden
+      $ref: ../../components/responses/Redoc-Problem.yaml
+    '404': 
+      description: Not Found
+      content: 
+        application/json: 
+          schema: 
+            $ref: ../../components/schemas/Redoc-Problem.yaml    
