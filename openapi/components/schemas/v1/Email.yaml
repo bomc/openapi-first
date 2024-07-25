@@ -1,0 +1,6 @@
+description: "User's email address."
+type: [string, 'null']
+format: email
+example: bo.mc@example.com
+maxLength: 255
+minLength: 3

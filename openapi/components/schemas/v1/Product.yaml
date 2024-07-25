@@ -1,0 +1,41 @@
+type: object
+properties: 
+  id: 
+    type: string
+    format: uuid
+    description: The unique identifier of the product.
+    readOnly: true
+  description:
+    type: string
+    description: The description of the product. 
+    minLength: 3
+    maxLength: 255
+  dimensions:
+    $ref: Dimensions.yaml
+  categories:
+    type: array
+    items: 
+      $ref: Category.yaml 
+  images:
+    type: array
+    items: 
+      $ref: Image.yaml
+  price:
+    type: string
+    pattern: ^-?(?:0|[1-9]\d{0,2}(?:,?\d{3})*)(?:\.\d+)?$
+  cost:
+    type: string
+    pattern: ^-?(?:0|[1-9]\d{0,2}(?:,?\d{3})*)(?:\.\d+)?$
+  dateCreated:
+    type: string
+    format: date-time
+    description: The date the image was created.
+    readOnly: true
+  dateUpdated:
+    type: string
+    format: date-time
+    description: The date the image was updated. 
+    readOnly: true
+required:
+  - description
+  - price

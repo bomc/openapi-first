@@ -1,0 +1,36 @@
+type: object  
+properties: 
+  id: 
+    type: string
+    format: uuid
+    description: The unique identifier of the order
+    readOnly: true
+  customer:
+    $ref: OrderCustomer.yaml
+  orderStatus:
+    type: string
+    enum: [NEW, HOLD, SHIPPED, DELIVERED, CLOSED]
+    default: NEW
+  shipmentInfo:
+    type: string
+    minLength: 1
+    maxLength: 255
+  orderLines:
+    type: array
+    items:
+      $ref: OrderLine.yaml
+    description: The order lines of the order
+  dateCreated:
+    type: string
+    format: date-time
+    description: The date the image was created
+    readOnly: true
+  dateUpdated:
+    type: string
+    format: date-time
+    description: The date the image was updated
+    readOnly: true
+required:
+  - customer
+  - orderStatus
+  - orderLines

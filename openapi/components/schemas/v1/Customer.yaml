@@ -1,0 +1,41 @@
+type: object
+properties:
+    id:
+      type: string
+      format: uuid
+      description: Unique identifier representing a specific customer
+      readOnly: true
+    name:  
+      $ref: name.yaml
+    shipToAddress:
+      $ref: CustomerAddress.yaml  
+    billToAddress:
+      $ref: CustomerAddress.yaml
+    email:
+      type: [string, 'null']
+      maxLength: 255
+      minLength: 3
+      example: john@springframework.guru
+    phone:
+      type: 
+        - string
+        - 'null'
+      maxLength: 15
+      minLength: 7
+      example: 800-555-1212
+    paymentMethods:
+      type: array
+      items: 
+        $ref: PaymentMethods.yaml      
+    dateCreated:
+      type: string
+      format: date-time
+      readOnly: true
+    dateUpdated:
+      type: string
+      format: date-time     
+      readOnly: true         
+required: 
+  - name
+  - shipToAddress
+  - billToAddress        
