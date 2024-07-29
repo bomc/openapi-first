@@ -32,7 +32,7 @@ post:
     content: 
       application/json: 
         schema: 
-          $ref: ../../components/schemas/v1/customer.yaml
+          $ref: ../../components/schemas/v1/Customer.yaml
   responses: 
     '201': 
       description: Created
