@@ -91,17 +91,6 @@ paths:
   '/v1/categories':
     $ref: paths/v1/categories.yaml  
   # end bomc
-  # start redoc
-  '/users/{username}':
-    $ref: 'paths/redocUsers_{username}.yaml'
-  '/user':
-    $ref: 'paths/redocUser.yaml'
-  '/user/list':
-    $ref: 'paths/redocUser-status.yaml'
-  /pathItem:
-    $ref: paths/redocPathItem.yaml
-  /pathItemWithExamples:
-    $ref: paths/redocPathItemWithExamples.yaml
 security: 
   -  basic_auth: []  
 components:
