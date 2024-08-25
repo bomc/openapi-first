@@ -1,0 +1,35 @@
+type: object
+properties: 
+  id: 
+    type: string
+    format: uuid
+    description: Unique identifier representing a specific payment method.
+  displayName: 
+    type: 
+      - string
+      - 'null'
+    minLength: 2
+    maxLength: 100
+    example: My Chase Card
+  cardNumber:
+    type: 
+      - integer
+      - 'null'
+    example: 1234567890123456
+  expiryMonth:
+    type: 
+      - integer
+      - 'null'
+    example: 7
+  expiryYear:
+    type: 
+      - integer
+      - 'null'
+    example: 26
+  cvv:
+    type: 
+      - integer
+      - 'null'
+    example: 123
+required: 
+  - id   

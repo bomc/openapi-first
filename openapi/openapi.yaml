@@ -85,9 +85,11 @@ paths:
   '/v1/products/{product_id}':
     $ref: 'paths/v1/products_{product_id}.yaml'
   '/v1/orders':
-      $ref: paths/v1/orders.yaml
+    $ref: paths/v1/orders.yaml
   '/v1/orders/{order_id}':
-      $ref: paths/v1/orders_{order_id}.yaml 
+    $ref: paths/v1/orders_{order_id}.yaml 
+  '/v1/categories':
+    $ref: paths/v1/categories.yaml  
   # end bomc
   # start redoc
   '/users/{username}':

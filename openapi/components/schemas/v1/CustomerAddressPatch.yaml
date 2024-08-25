@@ -1,9 +1,15 @@
-type: object
+type: 
+  - object
+  - 'null'
 properties: 
   id: 
-    $ref: ../common/UuidId.yaml
-  addressLine1: 
     type: string
+    format: uuid
+    description: Unique identifier representing a specific customer address
+  addressLine1: 
+    type: 
+      - string
+      - 'null'
     description: Address Line 1
     minLength: 3
     maxLength: 100
@@ -16,29 +22,28 @@ properties:
     minLength: 3
     maxLength: 100
   city:
-    type: string
+    type: 
+      - string
+      - 'null'
     description: City
     minLength: 2
     maxLength: 100
     example: St Petersburg
   state:
-    type: string
+    type: 
+      - string
+      - 'null'
     description: 2 character state code
     minLength: 2
     maxLength: 2
     example: FL
   zip: 
-    type: string
+    type: 
+      - string
+      - 'null'
     description: Zip Code 
     minLength: 5
     maxLength: 10  
     example: 33701     
-  dateCreated:
-    $ref: ../common/IsoTimestamp.yaml
-  dateUpdated:
-    $ref: ../common/IsoTimestamp.yaml 
 required: 
-  - addressLine1
-  - city
-  - state
-  - zip     
+  - id

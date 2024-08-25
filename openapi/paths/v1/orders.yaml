@@ -14,6 +14,28 @@ get:
             items:
               $ref: ../../components/schemas/v1/OrderList.yaml
     '400':
-      description: Bad Request 
+      $ref: ../../components/responses/BadRequest400.yaml
     '404':
-      description: Not Found 
+      $ref: ../../components/responses/NotFound404.yaml
+post: 
+  tags: 
+    -  Order
+  summary: Create Order
+  description: Create Order
+  operationId: createOrder
+  requestBody: 
+    content: 
+      application/json: 
+        schema: 
+          $ref: ../../components/schemas/v1/OrderCreate.yaml
+  responses:
+    '201':
+      description: Order Created
+      headers: 
+        Location:
+          schema: 
+            type: string
+          description: Path to the created Order
+          example: /v1/orders/27ca5995-f6e1-46bb-8f18-52458b7ed96e
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml   

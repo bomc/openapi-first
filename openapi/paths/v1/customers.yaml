@@ -13,15 +13,8 @@ get:
         application/json:
           schema:
             $ref: '../../components/schemas/v1/CustomerList.yaml'
-    '403':
-      description: Forbidden
-      $ref: ../../components/responses/Redoc-Problem.yaml
     '404': 
-      description: Not Found
-      content: 
-        application/json: 
-          schema: 
-            $ref: ../../components/schemas/Redoc-Problem.yaml
+      $ref: ../../components/responses/NotFound404.yaml
 post: 
   tags: 
     -  Customer
@@ -32,7 +25,7 @@ post:
     content: 
       application/json: 
         schema: 
-          $ref: ../../components/schemas/v1/customer.yaml
+          $ref: ../../components/schemas/v1/Customer.yaml
   responses: 
     '201': 
       description: Created
@@ -44,8 +37,4 @@ post:
             format: uri
             example: /v1/customers/27ca5995-f6e1-46bb-8f18-52458b7ed96e
     '400': 
-      description: Bad Request
-      content: 
-        application/json: 
-          schema: 
-            $ref: ../../components/schemas/Redoc-Problem.yaml
+      $ref: ../../components/responses/BadRequest400.yaml

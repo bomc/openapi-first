@@ -1,0 +1,7 @@
+name: product_id
+in: path
+description: The ID of the product to retrieve
+required: true
+schema: 
+  type: string
+  format: uuid

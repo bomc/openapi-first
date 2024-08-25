@@ -1,0 +1,19 @@
+type: object  
+properties: 
+  customerId:
+    type: 
+      - string
+      - 'null' 
+    format: uuid
+  selectPaymentMethodId:
+    type: 
+      - string
+      - 'null'
+    format: uuid
+  orderLines:
+    type: 
+      - array
+      - 'null'
+    items:
+      $ref: OrderLinePatch.yaml
+    description: The order lines of the order

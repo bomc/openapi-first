@@ -1,23 +1,29 @@
 type: object
 properties: 
   prefix:
-    type: string
+    type: 
+      - string
+      - 'null'
     description: Name Prefix
     minLength: 0
     maxLength: 25
     example: Mr.
   firstName:
-    type: string
+    type: 
+      - string
+      - 'null'
     description: First Name
     minLength: 2
     maxLength: 100
-    example: Bomc
+    example: John
   lastName:
-    type: string
+    type: 
+      - string
+      - 'null'
     description: Last Name
     minLength: 2
     maxLength: 100
-    example: Bo
+    example: Thompson
   suffix:
     type: 
       - string
@@ -25,6 +31,3 @@ properties:
     description: Name Suffix
     minLength: 0
     maxLength: 25
-required: 
-  - firstName
-  - lastName    

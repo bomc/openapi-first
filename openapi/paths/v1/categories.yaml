@@ -1,0 +1,17 @@
+get: 
+  tags: 
+    -  Products
+  summary: List Categories
+  description: List Categories
+  operationId: listCategories
+  responses: 
+    '200':
+      description: successful operation
+      content:
+        application/json:
+          schema:
+              $ref: ../../components/schemas/v1/CategoryList.yaml
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml
