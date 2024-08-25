@@ -6,7 +6,7 @@ properties:
     minLength: 3
     maxLength: 255
   dimensions:
-    $ref: dimensions.yaml
+    $ref: Dimensions.yaml
   categories:
     type: array
     description: The category codes for the product
