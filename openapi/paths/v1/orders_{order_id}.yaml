@@ -5,13 +5,7 @@ get:
   description: Get Order by id
   operationId: getOrderById
   parameters: 
-    - name: order_id
-      in: path
-      description: The ID of the order to retrieve.
-      required: true
-      schema: 
-        type: string
-        format: uuid
+    - $ref: ../../components/parameters/OrderId.yaml
   responses:
     '200':
       description: successful operation
@@ -20,6 +14,72 @@ get:
           schema:
             $ref: ../../components/schemas/v1/Order.yaml
     '400':
-      description: Bad Request 
+      $ref: ../../components/responses/BadRequest400.yaml
     '404':
-      description: Not Found
+      $ref: ../../components/responses/NotFound404.yaml
+put: 
+  tags: 
+    -  Order
+  summary: Update Order
+  description: Update Order
+  operationId: updateOrder
+  parameters: 
+    - $ref: ../../components/parameters/OrderId.yaml
+  requestBody: 
+    content: 
+      application/json: 
+        schema: 
+          $ref: ../../components/schemas/v1/OrderUpdate.yaml
+  responses:
+    '200':
+      description: Order Updated
+      headers: 
+        Location:
+          schema: 
+            type: string
+          description: Path to the updated Order
+          example: /v1/orders/27ca5995-f6e1-46bb-8f18-52458b7ed96e
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml
+patch: 
+  tags: 
+    -  Order
+  summary: Patch Order
+  description: Patch Order
+  operationId: patchOrder
+  parameters: 
+    - $ref: ../../components/parameters/OrderId.yaml
+  requestBody: 
+    content: 
+      application/json: 
+        schema: 
+          $ref: ../../components/schemas/v1/OrderPatch.yaml
+  responses:
+    '200':
+      description: Order Updated
+      content:
+        application/json:
+          schema:
+            $ref: ../../components/schemas/v1/Order.yaml
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml
+delete:     
+  tags: 
+    -  Order
+  summary: Delete a order by ID
+  description:  |
+    Patch a order by ID
+  operationId: deleteOrderById
+  parameters: 
+    - $ref: ../../components/parameters/OrderId.yaml
+  responses:
+    '204':
+      description: No Content
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml 
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml

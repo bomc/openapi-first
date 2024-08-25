@@ -1,10 +1,7 @@
 type: object
 properties: 
   id: 
-    type: string
-    format: uuid
-    description: The unique identifier of the category
-    readOnly: true
+    $ref: ../common/UuidId.yaml
   category: 
     type: string
     description: The category of the product
@@ -17,10 +14,17 @@ properties:
     minLength: 3
     maxLength: 255
     example: Electronics and Gadgets
+  category_code: 
+    type: string
+    description: The category code of the product
+    minLength: 3
+    maxLength: 25
+    example: ELECTRONICS 
   dateCreated:
-    $ref: ../common/iso_timestamp.yaml
+    $ref: ../common/IsoTimestamp.yaml
   dateUpdated:
-    $ref: ../common/iso_timestamp.yaml
+    $ref: ../common/IsoTimestamp.yaml
 required:
   - category
   - description
+  - category_code

@@ -1,9 +1,13 @@
 type: object
 properties: 
   id: 
-    $ref: ../common/UuidId.yaml
-  url:
     type: string
+    format: uuid
+    description: The unique identifier of the image
+  url:
+    type: 
+      - string
+      - 'null'
     format: url
     description: The url of the image 
     minLength: 5
@@ -15,9 +19,5 @@ properties:
       - 'null'
     minLength: 3
     maxLength: 255 
-  dateCreated:
-    $ref: ../common/IsoTimestamp.yaml
-  dateUpdated:
-    $ref: ../common/IsoTimestamp.yaml
 required: 
-  -  url    
+  -  id 

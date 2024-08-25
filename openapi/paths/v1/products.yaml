@@ -1,6 +1,6 @@
 get: 
   tags: 
-    -  Products
+    -  Product
   summary: Get a list of products
   description: Get a list of product.
   operationId: listProducts
@@ -15,8 +15,26 @@ get:
       description: Forbidden
       $ref: ../../components/responses/Redoc-Problem.yaml
     '404': 
-      description: Not Found
-      content: 
-        application/json: 
+      $ref: ../../components/responses/NotFound404.yaml
+post: 
+  tags: 
+    -  Product
+  summary: Create a new product
+  description: Create a new product.
+  operationId: createProduct
+  requestBody: 
+    content: 
+      application/json: 
+        schema: 
+          $ref: ../../components/schemas/v1/ProductCreate.yaml
+  responses: 
+    '201': 
+      description: Created
+      headers: 
+        Location: 
+          description: Location of the new resource
           schema: 
-            $ref: ../../components/schemas/Redoc-Problem.yaml    
+            type: string
+            example: /v1/products/27ca5995-f6e1-46bb-8f18-52458b7ed96e
+    '400': 
+      $ref: ../../components/responses/BadRequest400.yaml

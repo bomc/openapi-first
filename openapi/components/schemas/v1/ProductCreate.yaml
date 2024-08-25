@@ -1,18 +1,17 @@
 type: object
 properties: 
-  id: 
-    $ref: ../common/UuidId.yaml
   description:
     type: string
-    description: The description of the product. 
+    description: The description of the product 
     minLength: 3
     maxLength: 255
   dimensions:
     $ref: Dimensions.yaml
   categories:
     type: array
+    description: The category codes for the product
     items: 
-      $ref: Category.yaml 
+      type: string
   images:
     type: array
     items: 
@@ -23,10 +22,6 @@ properties:
   cost:
     type: string
     pattern: ^-?(?:0|[1-9]\d{0,2}(?:,?\d{3})*)(?:\.\d+)?$
-  dateCreated:
-    $ref: ../common/IsoTimestamp.yaml
-  dateUpdated:
-    $ref: ../common/IsoTimestamp.yaml
 required:
   - description
   - price

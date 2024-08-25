@@ -6,13 +6,7 @@ get:
     Get a customer by ID
   operationId: getCustomerById
   parameters: 
-    - name: customer_id
-      in: path
-      description: The ID of the customer to retrieve
-      required: true
-      schema: 
-        type: string
-        format: uuid
+    - $ref: ../../components/parameters/CustomerId.yaml
   responses:
     '200':
       description: successful operation
@@ -21,20 +15,70 @@ get:
           schema:
             $ref: ../../components/schemas/v1/Customer.yaml
     '400':
-      description: Bad Request
-      content: 
-        application/json: 
-          schema: 
-            $ref: ../../components/schemas/Redoc-Problem.yaml
-    '403':
-      description: Forbidden
-      content: 
-        application/json: 
-          schema: 
-            $ref: ../../components/schemas/Redoc-Problem.yaml
-    '404': 
-      description: Not Found
-      content: 
-        application/json: 
-          schema: 
-            $ref: ../../components/schemas/Redoc-Problem.yaml
+      $ref: ../../components/responses/BadRequest400.yaml
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml
+put:      
+  tags: 
+    -  Customer
+  summary: Update a customer by ID
+  description:  |
+    Update a customer by ID
+  operationId: updateCustomerById
+  parameters: 
+    - $ref: ../../components/parameters/CustomerId.yaml
+  requestBody:
+    content: 
+      application/json: 
+        schema: 
+          $ref: ../../components/schemas/v1/Customer.yaml
+  responses:
+    '200':
+      description: successful operation
+      content:
+        application/json:
+          schema:
+            $ref: ../../components/schemas/v1/Customer.yaml
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml 
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml
+patch:      
+  tags: 
+    -  Customer
+  summary: Patch a customer by ID
+  description:  |
+    Patch a customer by ID
+  operationId: patchCustomerById
+  parameters: 
+    - $ref: ../../components/parameters/CustomerId.yaml
+  requestBody:
+    content: 
+      application/json: 
+        schema: 
+          $ref: ../../components/schemas/v1/CustomerPatch.yaml
+  responses:
+    '204':
+      description: No Content
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml
+delete:     
+  tags: 
+    -  Customer
+  summary: Delete a customer by ID
+  description:  |
+    Delete a customer by ID
+  operationId: deleteCustomerById
+  parameters: 
+    - $ref: ../../components/parameters/CustomerId.yaml
+  responses:
+    '204':
+      description: No Content
+    '400':
+      $ref: ../../components/responses/BadRequest400.yaml
+    '404':
+      $ref: ../../components/responses/NotFound404.yaml
+    '409':
+      $ref: ../../components/responses/Conflict409.yaml

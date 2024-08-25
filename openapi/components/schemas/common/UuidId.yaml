@@ -1,0 +1,6 @@
+type: 
+  - string
+  - 'null'   # Note the quotes around 'null'
+format: uuid
+description: System generated unique identifier for the resource.
+readOnly: true

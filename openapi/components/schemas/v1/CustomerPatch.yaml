@@ -5,9 +5,9 @@ properties:
     name:  
       $ref: CustomerName.yaml
     shipToAddress:
-      $ref: CustomerAddress.yaml  
+      $ref: CustomerAddressPatch.yaml  
     billToAddress:
-      $ref: CustomerAddress.yaml
+      $ref: CustomerAddressPatch.yaml
     email:
       type: 
         - string
@@ -27,12 +27,4 @@ properties:
         - array
         - 'null'
       items: 
-        $ref: PaymentMethods.yaml      
-    dateCreated:
-      $ref: ../common/IsoTimestamp.yaml
-    dateUpdated:
-      $ref: ../common/IsoTimestamp.yaml      
-required: 
-  - name
-  - shipToAddress
-  - billToAddress  
+        $ref: CustomerPaymentMethodPatch.yaml
