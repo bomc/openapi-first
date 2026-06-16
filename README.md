@@ -27,40 +27,128 @@ bomc:
 
 ---
 
-# OpenAPI Spring Boot
-
-## Working on your OpenAPI Definition
-
-### Install
-
-1. Install [Node JS](https://nodejs.org/).
-2. Clone this repo and run `npm install` in the repo root.
-
-### Usage
-
-#### `npm start`
-Starts the reference docs preview server.
-
-#### `npm run build`
-Bundles the definition to the dist folder.
-
-#### `npm test`
-Validates the definition.
-
-
-```yaml
-bomc:
-  $example: ./for.code
-```
-
-
----
-
 # REST API Styleguide — Erklärungen auf Deutsch
 
 > Version 2.0 — Basierend auf [Zalando RESTful API Guidelines](https://opensource.zalando.com/restful-api-guidelines/), [Adidas API Guidelines](https://adidas.gitbook.io/api-guidelines/) und [Stripe API](https://docs.stripe.com/api).  
 > Zalando-interne Regeln wurden entfernt. Quercheck mit Adidas und Stripe eingearbeitet.  
 > Alle Regeln sind auf Deutsch erklärt. Eigene Regeln sind explizit gekennzeichnet.
+
+---
+
+## Inhaltsverzeichnis
+
+- [Konventionen](#konventionen)
+- [Zusammenfassung unserer Abweichungen](#zusammenfassung-unserer-abweichungen-gegenüber-zalando)
+- [1. Allgemeine Richtlinien](#1-allgemeine-richtlinien)
+  - [#100 · API-First-Prinzip](#100--muss--api-first-prinzip-befolgen)
+  - [#101 · API-Spezifikation mit OpenAPI](#101--muss--api-spezifikation-mit-openapi-bereitstellen)
+  - [#102 · API-Benutzerhandbuch](#102--sollte--api-benutzerhandbuch-bereitstellen)
+  - [#103 · U.S. English](#103--muss--apis-auf-amerikanischem-englisch-schreiben)
+  - [✦ C-08 · Minimale API-Oberfläche (YAGNI)](#-c-08--muss--minimale-api-oberfläche-yagni-prinzip-adidas)
+  - [✦ C-09 · Postel's Law](#-c-09--muss--robustheit-nach-postels-law-adidas)
+  - [✦ C-12 · API-Specs in Git versionieren](#-c-12--muss--api-spezifikationen-in-git-versionieren-adidas)
+- [2. Meta-Informationen](#2-meta-informationen)
+  - [#218 · API Meta-Informationen](#218--muss--api-meta-informationen-enthalten)
+  - [#116 · Semantic Versioning](#116--muss--semantic-versioning-verwenden)
+  - [#215 · API-Identifier](#215--muss--api-identifier-bereitstellen)
+  - [#219 · API-Zielgruppe](#219--muss--api-zielgruppe-angeben)
+- [3. Sicherheit](#3-sicherheit)
+  - [#104 · Alle Endpunkte absichern](#104--muss--alle-endpunkte-absichern)
+  - [#105 · Berechtigungen (Scopes)](#105--muss--berechtigungen-scopes-definieren-und-zuweisen)
+  - [✦ C-06 · Scope-Namenskonvention](#-c-06--muss--einheitliche-scope-namenskonvention-löst-225-ab)
+- [4. Datenformate](#4-datenformate)
+  - [#238 · Standarddatenformate](#238--muss--standarddatenformate-verwenden)
+  - [#171 · Format für Zahlen und Integer](#171--muss--format-für-zahlen-und-integer-definieren)
+  - [#169 · Datum/Zeit-Formate](#169--muss--standardformate-für-datumzeit-verwenden)
+  - [#255 · Geeignete Datum/Zeit-Formate](#255--sollte--geeignete-datumzeit-formate-wählen)
+  - [#127 · Zeitdauern](#127--sollte--standardformate-für-zeitdauern-verwenden)
+  - [#170 · Land, Sprache, Währung](#170--muss--standardformate-für-land-sprache-währung)
+  - [#244 · Content Negotiation](#244--sollte--content-negotiation-unterstützen)
+  - [#144 · UUIDs](#144--sollte--uuids-nur-wenn-notwendig-verwenden)
+- [5. URLs](#5-urls)
+  - [✦ C-01 · URL-Versionierung](#-c-01--muss--url-versionierung-verwenden-ersetzt-113-114-115)
+  - [#134 · Ressourcennamen im Plural](#134--muss--ressourcennamen-im-plural)
+  - [#228 · URL-kompatible IDs](#228--muss--url-kompatible-ressourcen-ids)
+  - [#129 · kebab-case für Pfadsegmente](#129--muss--kebab-case-für-pfadsegmente)
+  - [#136 · Normalisierte Pfade](#136--muss--normalisierte-pfade-ohne-trailing-slashes)
+  - [#141 · URLs verb-frei](#141--muss--urls-frei-von-verben-halten)
+  - [#138 · Ressourcen statt Aktionen](#138--muss--aktionen-vermeiden--in-ressourcen-denken)
+  - [#142 · Domänenspezifische Namen](#142--muss--domänenspezifische-ressourcennamen)
+  - [#143 · Ressourcen via Pfadsegmente](#143--muss--ressourcen-via-pfadsegmente-identifizieren)
+  - [#130 · snake_case für Query-Parameter](#130--muss--snakecase-für-query-parameter)
+  - [#137 · Konventionelle Query-Parameter](#137--muss--konventionelle-query-parameter-verwenden)
+- [6. JSON Payload](#6-json-payload)
+  - [#167 · JSON als Datenformat](#167--muss--json-als-datenformat-verwenden)
+  - [#118 · snake_case für Properties](#118--muss--snakecase-für-property-namen-niemals-camelcase)
+  - [✦ C-02 · Kein HATEOAS](#-c-02--muss-nicht--kein-hateoas-ersetzt-163-164-165)
+  - [#174 · Gemeinsame Feldnamen](#174--muss--gemeinsame-feldnamen-verwenden)
+  - [✦ C-07 · metadata-Feld](#-c-07--sollte--metadata-feld-für-erweiterbare-ressourcen-stripe)
+  - [✦ C-11 · description vs. metadata](#-c-11--sollte--description-und-metadata-klar-trennen-stripe)
+  - [#235 · _at-Suffix für Datum/Zeit](#235--sollte--_at-suffix-für-datumzeit-properties)
+  - [#240 · Enum UPPER_SNAKE_CASE](#240--sollte--enum-werte-in-upper_snake_case)
+  - [#120 · Array-Namen im Plural](#120--sollte--array-namen-im-plural)
+  - [#123 · null und fehlende Properties](#123--muss--gleiche-semantik-für-null-und-fehlende-properties)
+  - [#122 · null für Boolean](#122--muss--null-nicht-für-boolean-properties)
+  - [#124 · null für Arrays](#124--sollte--null-nicht-für-leere-arrays)
+  - [#216 · Maps mit additionalProperties](#216--sollte--maps-mit-additionalproperties-definieren)
+- [7. HTTP-Anfragen](#7-http-anfragen)
+  - [#148 · HTTP-Methoden korrekt](#148--muss--http-methoden-korrekt-verwenden)
+  - [#149 · Methoden-Eigenschaften](#149--muss--gemeinsame-methoden-eigenschaften-einhalten)
+  - [#229 · Idempotentes POST/PATCH](#229--sollte--post-und-patch-idempotent-gestalten)
+  - [#231 · Sekundärschlüssel für POST](#231--sollte--sekundärschlüssel-für-idempotentes-post)
+  - [#253 · Asynchrone Verarbeitung](#253--kann--asynchrone-anfrageverarbeitung)
+  - [#154 · Collection-Format für Parameter](#154--muss--collection-format-für-header-und-query-parameter-definieren)
+  - [#236 · Einfache Filter](#236--sollte--einfache-filter-als-query-parameter)
+  - [#237 · Komplexe Filter](#237--sollte--komplexe-filter-als-json-body-post)
+  - [#226 · Implizite Filterung dokumentieren](#226--muss--implizite-response-filterung-dokumentieren)
+- [8. HTTP-Statuscodes](#8-http-statuscodes)
+  - [#243 · Nur offizielle Statuscodes](#243--muss--nur-offizielle-http-statuscodes)
+  - [#151 · Alle Statuscodes spezifizieren](#151--muss--alle-statuscodes-spezifizieren)
+  - [#150 · Gebräuchliche Statuscodes](#150--sollte--nur-gebräuchliche-statuscodes-verwenden)
+  - [#220 · Spezifischster Statuscode](#220--muss--spezifischsten-statuscode-verwenden)
+  - [#152 · Code 207 für Batch](#152--muss--code-207-für-batchbulk-requests)
+  - [#153 · Code 429 mit Retry-After](#153--muss--code-429-mit-retry-after-bei-rate-limits)
+  - [#176 · Problem JSON](#176--muss--problem-json-für-alle-fehler-rfc-7807)
+  - [#177 · Keine Stack Traces](#177--muss--keine-stack-traces-in-fehler-responses)
+- [9. HTTP-Header](#9-http-header)
+  - [#178 · Content-Header](#178--muss--content--header-korrekt-verwenden)
+  - [✦ C-03/C-04 · W3C Trace Context](#-c-03--c-04--muss--w3c-trace-context-ersetzt-233-x-flow-id)
+  - [✦ C-05 · trace_id in Fehler-Responses](#-c-05--sollte--trace_id-in-5xx-problem-json-responses)
+  - [#132 · kebab-case für Header](#132--sollte--kebab-case-mit-grossbuchstaben-für-eigene-http-header)
+  - [#180 · Location Header](#180--sollte--location-header-nach-post)
+  - [#182 · ETag](#182--kann--etag-mit-if-match--if-none-match)
+  - [#230 · Idempotency-Key](#230--kann--idempotency-key-header)
+  - [#181 · Prefer Header](#181--kann--prefer-header)
+- [10. Performance](#10-performance)
+  - [#227 · Cacheable Endpunkte](#227--muss--cacheable-endpunkte-dokumentieren)
+  - [#156 · gzip-Komprimierung](#156--sollte--gzip-komprimierung-unterstützen)
+  - [#157 · Partial Responses](#157--sollte--partial-responses-via-feldauswahl)
+  - [#158 · Sub-Ressourcen einbetten](#158--sollte--einbetten-von-sub-ressourcen-erlauben)
+- [11. Paginierung](#11-paginierung)
+  - [#159 · Paginierung für alle Collections](#159--muss--paginierung-für-alle-collection-ressourcen)
+  - [#160 · Cursor-basierte Paginierung](#160--sollte--cursor-basierte-paginierung-bevorzugen)
+  - [#248 · Pagination Response Object](#248--sollte--standard-pagination-response-object)
+  - [#254 · Gesamtanzahl vermeiden](#254--sollte--gesamtanzahl-vermeiden)
+- [12. Kompatibilität und Erweiterbarkeit](#12-kompatibilität-und-erweiterbarkeit)
+  - [#106 · Keine Breaking Changes](#106--muss--keine-breaking-changes)
+  - [✦ C-10 · Vier Erweiterungsregeln](#-c-10--muss--vier-erweiterungsregeln-einhalten-adidas)
+  - [#108 · Clients auf Erweiterungen vorbereiten](#108--muss--clients-auf-erweiterungen-vorbereiten)
+  - [#110 · JSON-Objekte als Top-Level](#110--muss--json-objekte-als-top-level-datenstruktur)
+  - [#111 · OpenAPI als erweiterbar](#111--muss--openapi-spec-als-erweiterbar-behandeln)
+  - [#112 · Offene Enum-Listen](#112--sollte--offene-enum-listen-verwenden)
+- [13. Deprecation](#13-deprecation)
+  - [#187 · Deprecation in Spec markieren](#187--muss--deprecation-in-api-spezifikation-markieren)
+  - [#185 · Genehmigung vor Abschaltung](#185--muss--genehmigung-der-konsumenten-vor-api-abschaltung)
+  - [#186 · Consent externer Partner](#186--muss--consent-externer-partner)
+  - [#188 · Nutzung monitoren](#188--muss--nutzung-der-deprecated-api-monitoren)
+  - [#191 · Keine deprecated APIs nutzen](#191--muss--keine-deprecated-apis-neu-verwenden)
+  - [#189 · Deprecation Header](#189--sollte--deprecation-und-sunset-header)
+  - [#190 · Monitoring für Sunset](#190--sollte--monitoring-für-deprecation-und-sunset)
+- [14. Betrieb](#14-betrieb)
+  - [#192 · OpenAPI veröffentlichen](#192--muss--openapi-spezifikation-veröffentlichen)
+  - [#193 · API-Nutzung monitoren](#193--sollte--api-nutzung-monitoren)
+- [Übersicht: Alle eigenen Regeln](#übersicht-alle-eigenen-regeln)
+- [Entfernte Zalando-interne Regeln](#entfernte-zalando-interne-regeln)
 
 ---
 
@@ -1677,6 +1765,7 @@ GET /docs            # Optional: Swagger UI
 
 *Version 2.0 — Basiert auf Zalando, Adidas und Stripe API Guidelines*  
 *Quercheck: [Stripe API](https://docs.stripe.com/api) · [Adidas Guidelines](https://adidas.gitbook.io/api-guidelines)*
+
 
 
 
