@@ -27,6 +27,35 @@ bomc:
 
 ---
 
+# OpenAPI Spring Boot
+
+## Working on your OpenAPI Definition
+
+### Install
+
+1. Install [Node JS](https://nodejs.org/).
+2. Clone this repo and run `npm install` in the repo root.
+
+### Usage
+
+#### `npm start`
+Starts the reference docs preview server.
+
+#### `npm run build`
+Bundles the definition to the dist folder.
+
+#### `npm test`
+Validates the definition.
+
+
+```yaml
+bomc:
+  $example: ./for.code
+```
+
+
+---
+
 # REST API Styleguide — Erklärungen auf Deutsch
 
 > Version 2.0 — Basierend auf [Zalando RESTful API Guidelines](https://opensource.zalando.com/restful-api-guidelines/), [Adidas API Guidelines](https://adidas.gitbook.io/api-guidelines/) und [Stripe API](https://docs.stripe.com/api).  
