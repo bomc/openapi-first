@@ -273,15 +273,135 @@ paths:
         - BearerAuth: [write:orders]
 ```
 
-**✦ Eigene Regel C-06 — Scope-Namenskonvention** (ersetzt #225):
+---
 
-Format: `{aktion}:{ressource}`
+### ✦ C-06 · MUSS · Einheitliche Scope-Namenskonvention (löst #225 ab)
 
-| Beispiel | Bedeutung |
-|---|---|
-| `read:orders` | Bestellungen lesen |
-| `write:orders` | Bestellungen anlegen/ändern |
-| `admin:orders` | Administrative Operationen |
+#### Kontext
+
+Scopes sind der Mechanismus mit dem ein OAuth2-Token deklariert, **was ein Client mit einer API darf**. Ohne einheitliche Benennung entstehen schnell willkürliche Namen wie `fullAccess`, `myScope` oder `perm_1` — die für Konsumenten unverständlich und für das Authorization-System schwer verwaltbar sind.
+
+Zalando Regel #225 löste dieses Problem über ein internes Functional Component Registry (`{application-id}.{access-type}`). Da wir dieses Zalando-interne System nicht verwenden, definieren wir ein eigenes, einfaches Schema.
+
+#### Schema
+
+```
+{aktion}:{ressource}
+```
+
+- **Aktion:** Kleinbuchstaben, eine der drei erlaubten Werte: `read`, `write`, `admin`
+- **Ressource:** Kleinbuchstaben, kebab-case, entspricht dem Ressourcennamen im URL-Pfad (Plural)
+- **Trennzeichen:** Doppelpunkt `:`
+
+#### Erlaubte Aktionen
+
+| Aktion | Bedeutung | Typische HTTP-Methoden |
+|---|---|---|
+| `read` | Lesender Zugriff | `GET`, `HEAD` |
+| `write` | Schreibender Zugriff (anlegen, ändern, löschen) | `POST`, `PUT`, `PATCH`, `DELETE` |
+| `admin` | Administrative Operationen (z.B. Konfiguration, Massenoperationen) | `POST`, `DELETE` auf Admin-Endpunkten |
+
+#### Anwendungsbeispiele
+
+**Einfache Ressource:**
+```yaml
+# OpenAPI Security Scheme Definition
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:orders: Bestellungen und Bestellpositionen lesen
+            write:orders: Bestellungen anlegen, ändern und stornieren
+            admin:orders: Bestellungen im Auftrag anderer Mandanten verwalten
+
+# Endpunkt-Absicherung
+paths:
+  /v1/orders:
+    get:
+      security:
+        - OAuth2: [read:orders]
+    post:
+      security:
+        - OAuth2: [write:orders]
+  /v1/orders/{id}:
+    patch:
+      security:
+        - OAuth2: [write:orders]
+    delete:
+      security:
+        - OAuth2: [write:orders]
+```
+
+**Mehrere Ressourcen in einer API:**
+```yaml
+scopes:
+  read:orders:        Bestellungen lesen
+  write:orders:       Bestellungen schreiben
+  read:customers:     Kunden lesen
+  write:customers:    Kunden schreiben
+  admin:customers:    Kunden administrieren (Merge, Löschen)
+```
+
+**Endpunkt der mehrere Scopes akzeptiert:**
+```yaml
+# Entweder read:orders ODER admin:orders berechtigt
+/v1/orders:
+  get:
+    security:
+      - OAuth2: [read:orders]
+      - OAuth2: [admin:orders]
+```
+
+#### Wann `write` vs. `admin`?
+
+`write` ist für normale CRUD-Operationen durch reguläre Konsumenten. `admin` ist für Operationen die erweiterte Rechte erfordern — typischerweise:
+
+- Operationen im Namen anderer Mandanten / Nutzer
+- Massenoperationen (Batch-Delete, Bulk-Update)
+- Konfigurationsänderungen die alle Konsumenten betreffen
+- Zugriff auf nicht-öffentliche Felder (z.B. interne Kostenfelder)
+
+#### Was ist NICHT erlaubt
+
+```
+# ✗ Freitext ohne Schema
+fullAccess
+myOrderPermission
+perm_read_1
+
+# ✗ Falsches Trennzeichen
+read.orders       (Punkt — Zalando-Schema)
+read/orders       (Slash)
+readOrders        (camelCase)
+
+# ✗ Singular statt Plural
+read:order        (Ressource muss Plural sein wie im URL)
+
+# ✗ Verb im Ressourcennamen
+read:get-orders   (Verb gehört in die Aktion, nicht die Ressource)
+```
+
+#### Registrierung in Gravitee
+
+Scopes werden in Gravitee beim API-Plan definiert und müssen exakt mit der OpenAPI-Spezifikation übereinstimmen:
+
+```json
+{
+  "name": "Premium Plan",
+  "security": "OAUTH2",
+  "scopes": ["read:orders", "write:orders"]
+}
+```
+
+#### Abgrenzung zu #104 und #105
+
+- **#104** sagt: *jeder Endpunkt muss abgesichert sein* — das **Ob**
+- **#105** sagt: *Scopes müssen definiert und zugewiesen werden* — das **Was**
+- **C-06** sagt: *Scopes müssen diesem Namensschema folgen* — das **Wie**
 
 ---
 
@@ -1387,6 +1507,7 @@ GET /docs            # Optional: Swagger UI
 
 *Version 2.0 — Basiert auf Zalando, Adidas und Stripe API Guidelines*  
 *Quercheck: [Stripe API](https://docs.stripe.com/api) · [Adidas Guidelines](https://adidas.gitbook.io/api-guidelines)*
+
 
 
 
