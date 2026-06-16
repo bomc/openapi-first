@@ -965,11 +965,152 @@ Langläufige Operationen können asynchron verarbeitet werden:
 
 ---
 
-### #154 · MUSS · Collection-Format für Parameter definieren
+### #154 · MUSS · Collection-Format für Header und Query-Parameter definieren
+
+#### Kontext
+
+Viele Parameter können mehrere Werte gleichzeitig annehmen — zum Beispiel mehrere Statuswerte filtern, mehrere Felder sortieren oder mehrere IDs abfragen. Ohne eine dokumentierte Konvention, wie mehrere Werte in einem Parameter übergeben werden, entscheiden Entwickler das spontan und inkonsistent. Das Ergebnis: APIs in denen `?status=OPEN,CANCELLED`, `?status=OPEN&status=CANCELLED` und `?status[]=OPEN&status[]=CANCELLED` gleichzeitig im Einsatz sind — alle leicht unterschiedlich.
+
+Diese Regel verlangt: **Jeder Parameter der mehrere Werte annehmen kann, muss in der OpenAPI-Spezifikation explizit dokumentieren, welches Format verwendet wird.**
+
+#### Die vier Collection-Formate in OpenAPI
+
+OpenAPI 3.1 kennt vier Serialisierungsformate für Arrays in Query-Parametern, gesteuert durch `style` und `explode`:
+
+| Format | `style` | `explode` | Beispiel für `?status=OPEN,CANCELLED` |
+|---|---|---|---|
+| **csv** (Standard) | `form` | `false` | `?status=OPEN,CANCELLED` |
+| **multi** | `form` | `true` | `?status=OPEN&status=CANCELLED` |
+| **ssv** | `spaceDelimited` | `false` | `?status=OPEN%20CANCELLED` |
+| **pipes** | `pipeDelimited` | `false` | `?status=OPEN\|CANCELLED` |
+
+**Unsere Empfehlung: `csv` (kommagetrennt) als Standard** — lesbar, URL-freundlich und von den meisten HTTP-Clients direkt unterstützt. `multi` als Alternative wenn der API-Consumer ein Framework nutzt das Arrays automatisch explodiert (z.B. Spring, axios).
+
+#### OpenAPI Spezifikation
+
+```yaml
+parameters:
+  # csv — kommagetrennt (Standard, empfohlen)
+  - name: status
+    in: query
+    style: form
+    explode: false
+    schema:
+      type: array
+      items:
+        type: string
+        enum: [OPEN, IN_PROGRESS, COMPLETED, CANCELLED]
+    description: |
+      Filtert nach Bestellstatus. Mehrere Werte kommagetrennt.
+      Beispiel: ?status=OPEN,IN_PROGRESS
+
+  # multi — Schlüssel wiederholen
+  - name: tag
+    in: query
+    style: form
+    explode: true
+    schema:
+      type: array
+      items:
+        type: string
+    description: |
+      Filtert nach Tags. Parameter wird pro Wert wiederholt.
+      Beispiel: ?tag=sale&tag=new-arrival
+```
+
+#### Alle Query-Parameter aus #137 mit ihrem Collection-Format
+
+Diese konventionellen Parameter aus Regel #137 haben ein festgelegtes Format:
+
+| Parameter | Format | Beispiel | Erklärung |
+|---|---|---|---|
+| `sort` | csv mit Präfix | `?sort=+created_at,-status` | `+` aufsteigend, `-` absteigend, kommagetrennt |
+| `fields` | csv | `?fields=id,status,created_at` | Feldauswahl, kommagetrennt |
+| `embed` | csv | `?embed=items,customer` | Sub-Ressourcen einbetten, kommagetrennt |
+| `cursor` | single | `?cursor=eyJpZCI6IjEyMyJ9` | Einzelwert, kein Array |
+| `limit` | single | `?limit=20` | Einzelwert, kein Array |
+| `q` | single | `?q=winter+jacket` | Suchbegriff, Leerzeichen URL-encoded |
+
+#### Vollständige Beispiele
+
+**Mehrere Statuswerte filtern (csv):**
+```
+GET /v1/orders?status=OPEN,IN_PROGRESS
+→ Liefert Bestellungen mit Status OPEN oder IN_PROGRESS
+```
+
+**Mehrere Felder sortieren:**
+```
+GET /v1/orders?sort=-created_at,+status
+→ Neueste zuerst, bei Gleichstand alphabetisch nach Status
+```
+
+**Felder kombinieren:**
+```
+GET /v1/orders?status=OPEN&sort=-created_at&fields=id,status,total_amount&limit=20
+→ Offene Bestellungen, neueste zuerst, nur 3 Felder, max 20 Ergebnisse
+```
+
+**Mehrere IDs abfragen (multi-Format):**
+```
+GET /v1/orders?id=abc&id=def&id=ghi
+→ Liefert genau diese drei Bestellungen
+```
+
+#### Was in der OpenAPI-Spec MUSS dokumentiert sein
+
+Für jeden Parameter der Arrays akzeptiert:
+
+```yaml
+- name: status
+  in: query
+  required: false
+  style: form          # MUSS angegeben sein
+  explode: false       # MUSS angegeben sein
+  schema:
+    type: array        # MUSS array sein wenn mehrere Werte möglich
+    minItems: 1
+    maxItems: 10       # SOLLTE ein sinnvolles Limit haben
+    items:
+      type: string
+  description: |       # MUSS das Format im Text beschreiben
+    Kommagetrennte Liste von Statuswerten.
+    Beispiel: ?status=OPEN,CANCELLED
+  example: "OPEN,IN_PROGRESS"   # SOLLTE ein konkretes Beispiel haben
+```
+
+#### Header vs. Query-Parameter
+
+Die Regel gilt für beide, aber es gibt einen wichtigen Unterschied:
+
+- **Query-Parameter:** alle vier Formate (csv, multi, ssv, pipes) sind möglich
+- **HTTP-Header:** in OpenAPI 3.x nur `style: simple` (`explode: false`) unterstützt — entspricht kommagetrennt
+
+```yaml
+# Header mit mehreren Werten — nur simple/csv möglich
+parameters:
+  - name: X-Custom-Tags
+    in: header
+    style: simple      # Einzige sinnvolle Option für Header in OpenAPI 3.x
+    explode: false
+    schema:
+      type: array
+      items:
+        type: string
+    example: "tag1,tag2,tag3"
+```
+
+#### Was NICHT erlaubt ist
 
 ```
-?sort=+name,-created_at     # kommagetrennt
-?fields=id,status           # kommagetrennt
+# ✗ Kein dokumentiertes Format — Konsumenten müssen raten
+/v1/orders?status=OPEN,CANCELLED    ohne OpenAPI style/explode Angabe
+
+# ✗ PHP-Array-Notation — nicht in OpenAPI abbildbar
+/v1/orders?status[]=OPEN&status[]=CANCELLED
+
+# ✗ JSON-Array im Query-Parameter — schwer zu URL-encoden
+/v1/orders?status=["OPEN","CANCELLED"]
 ```
 
 ---
@@ -1507,6 +1648,7 @@ GET /docs            # Optional: Swagger UI
 
 *Version 2.0 — Basiert auf Zalando, Adidas und Stripe API Guidelines*  
 *Quercheck: [Stripe API](https://docs.stripe.com/api) · [Adidas Guidelines](https://adidas.gitbook.io/api-guidelines)*
+
 
 
 
