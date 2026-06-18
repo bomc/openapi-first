@@ -35,154 +35,135 @@ bomc:
 
 ## Inhaltsverzeichnis
 
-- [Konventionen](#konventionen)
-- [Abweichungen gegenüber Zalando](#abweichungen)
-- [1. Allgemeine Richtlinien](#kap-1)
-  - [#100 · API-First-Prinzip](#r-100)
-  - [#101 · API-Spezifikation mit OpenAPI](#r-101)
-  - [#102 · API-Benutzerhandbuch](#r-102)
-  - [#103 · U.S. English](#r-103)
-  - [C-08 · Minimale API-Oberfläche (YAGNI)](#c-08)
-  - [C-09 · Postel's Law](#c-09)
-  - [C-12 · API-Specs in Git versionieren](#c-12)
-- [2. Meta-Informationen](#kap-2)
-  - [#218 · API Meta-Informationen](#r-218)
-  - [#116 · Semantic Versioning](#r-116)
-  - [#215 · API-Identifier](#r-215)
-  - [#219 · API-Zielgruppe](#r-219)
-- [3. Sicherheit](#kap-3)
-  - [#104 · Alle Endpunkte absichern](#r-104)
-  - [#105 · Berechtigungen (Scopes)](#r-105)
-  - [C-06 · Scope-Namenskonvention](#c-06)
-- [4. Datenformate](#kap-4)
-  - [#238 · Standarddatenformate](#r-238)
-  - [#171 · Format für Zahlen und Integer](#r-171)
-  - [#169 · Datum/Zeit-Formate](#r-169)
-  - [#255 · Geeignete Datum/Zeit-Formate](#r-255)
-  - [#127 · Zeitdauern](#r-127)
-  - [#170 · Land, Sprache, Währung](#r-170)
-  - [#244 · Content Negotiation](#r-244)
-  - [#144 · UUIDs](#r-144)
-- [5. URLs](#kap-5)
-  - [C-01 · URL-Versionierung](#c-01)
-  - [#134 · Ressourcennamen im Plural](#r-134)
-  - [#228 · URL-kompatible IDs](#r-228)
-  - [#129 · kebab-case für Pfadsegmente](#r-129)
-  - [#136 · Normalisierte Pfade](#r-136)
-  - [#141 · URLs verb-frei](#r-141)
-  - [#138 · Ressourcen statt Aktionen](#r-138)
-  - [#142 · Domänenspezifische Namen](#r-142)
-  - [#143 · Ressourcen via Pfadsegmente](#r-143)
-  - [#130 · snake_case für Query-Parameter](#r-130)
-  - [#137 · Konventionelle Query-Parameter](#r-137)
-- [6. JSON Payload](#kap-6)
-  - [#167 · JSON als Datenformat](#r-167)
-  - [#118 · snake_case für Properties](#r-118)
-  - [C-02 · Kein HATEOAS](#c-02)
-  - [#174 · Gemeinsame Feldnamen](#r-174)
-  - [C-07 · metadata-Feld](#c-07)
-  - [C-11 · description vs. metadata](#c-11)
-  - [#235 · _at-Suffix für Datum/Zeit](#r-235)
-  - [#240 · Enum UPPER_SNAKE_CASE](#r-240)
-  - [#120 · Array-Namen im Plural](#r-120)
-  - [#123 · null und fehlende Properties](#r-123)
-  - [#122 · null für Boolean](#r-122)
-  - [#124 · null für Arrays](#r-124)
-  - [#216 · Maps mit additionalProperties](#r-216)
-- [7. HTTP-Anfragen](#kap-7)
-  - [#148 · HTTP-Methoden korrekt](#r-148)
-  - [#149 · Methoden-Eigenschaften](#r-149)
-  - [#229 · Idempotentes POST/PATCH](#r-229)
-  - [#231 · Sekundärschlüssel für POST](#r-231)
-  - [#253 · Asynchrone Verarbeitung](#r-253)
-  - [#154 · Collection-Format für Parameter](#r-154)
-  - [#236 · Einfache Filter](#r-236)
-  - [#237 · Komplexe Filter](#r-237)
-  - [#226 · Implizite Filterung dokumentieren](#r-226)
-- [8. HTTP-Statuscodes](#kap-8)
-  - [#243 · Nur offizielle Statuscodes](#r-243)
-  - [#151 · Alle Statuscodes spezifizieren](#r-151)
-  - [#150 · Gebräuchliche Statuscodes](#r-150)
-  - [#220 · Spezifischster Statuscode](#r-220)
-  - [#152 · Code 207 für Batch](#r-152)
-  - [#153 · Code 429 mit Retry-After](#r-153)
-  - [#176 · Problem JSON](#r-176)
-  - [#177 · Keine Stack Traces](#r-177)
-- [9. HTTP-Header](#kap-9)
-  - [C-03/C-04 · W3C Trace Context](#c-03-04)
-  - [C-05 · trace_id in Fehler-Responses](#c-05)
-  - [#132 · kebab-case für Header](#r-132)
-  - [#178 · Content-Header](#r-178)
-  - [#180 · Location Header](#r-180)
-  - [#182 · ETag](#r-182)
-  - [#230 · Idempotency-Key](#r-230)
-  - [#181 · Prefer Header](#r-181)
-- [10. Performance](#kap-10)
-  - [#227 · Cacheable Endpunkte](#r-227)
-  - [#156 · gzip-Komprimierung](#r-156)
-  - [#157 · Partial Responses](#r-157)
-  - [#158 · Sub-Ressourcen einbetten](#r-158)
-- [11. Paginierung](#kap-11)
-  - [#159 · Paginierung für alle Collections](#r-159)
-  - [#160 · Cursor-basierte Paginierung](#r-160)
-  - [#248 · Pagination Response Object](#r-248)
-  - [#254 · Gesamtanzahl vermeiden](#r-254)
-- [12. Kompatibilität und Erweiterbarkeit](#kap-12)
-  - [#106 · Keine Breaking Changes](#r-106)
-  - [C-10 · Vier Erweiterungsregeln](#c-10)
-  - [#108 · Clients auf Erweiterungen vorbereiten](#r-108)
-  - [#110 · JSON-Objekte als Top-Level](#r-110)
-  - [#111 · OpenAPI als erweiterbar](#r-111)
-  - [#112 · Offene Enum-Listen](#r-112)
-- [13. Deprecation](#kap-13)
-  - [#187 · Deprecation in Spec markieren](#r-187)
-  - [#185 · Genehmigung vor Abschaltung](#r-185)
-  - [#186 · Consent externer Partner](#r-186)
-  - [#188 · Nutzung monitoren](#r-188)
-  - [#191 · Keine deprecated APIs nutzen](#r-191)
-  - [#189 · Deprecation Header](#r-189)
-  - [#190 · Monitoring für Sunset](#r-190)
-- [14. Betrieb](#kap-14)
-  - [#192 · OpenAPI veröffentlichen](#r-192)
-  - [#193 · API-Nutzung monitoren](#r-193)
-- [Übersicht: Alle eigenen Regeln](#eigene-regeln)
-- [Entfernte Zalando-interne Regeln](#entfernte-regeln)
+- [Zusammenfassung unserer Abweichungen gegenüber Zalando](#zusammenfassung-unserer-abweichungen-gegenüber-zalando)
+- [1. Allgemeine Richtlinien](#1-allgemeine-richtlinien)
+  - [100 MUSS API-First-Prinzip befolgen](#100-muss-api-first-prinzip-befolgen)
+  - [101 MUSS API-Spezifikation mit OpenAPI bereitstellen](#101-muss-api-spezifikation-mit-openapi-bereitstellen)
+  - [102 SOLLTE API-Benutzerhandbuch bereitstellen](#102-sollte-api-benutzerhandbuch-bereitstellen)
+  - [103 MUSS APIs auf amerikanischem Englisch schreiben](#103-muss-apis-auf-amerikanischem-englisch-schreiben)
+  - [C-08 MUSS Minimale API-Oberfläche (YAGNI-Prinzip)](#c-08-muss-minimale-api-oberfläche-yagni-prinzip)
+  - [C-09 MUSS Robustheit nach Postel's Law](#c-09-muss-robustheit-nach-postel-s-law)
+  - [C-12 MUSS API-Spezifikationen in Git versionieren](#c-12-muss-api-spezifikationen-in-git-versionieren)
+- [2. Meta-Informationen](#2-meta-informationen)
+  - [218 MUSS API Meta-Informationen enthalten](#218-muss-api-meta-informationen-enthalten)
+  - [116 MUSS Semantic Versioning verwenden](#116-muss-semantic-versioning-verwenden)
+  - [215 MUSS API-Identifier bereitstellen](#215-muss-api-identifier-bereitstellen)
+  - [219 MUSS API-Zielgruppe angeben](#219-muss-api-zielgruppe-angeben)
+- [3. Sicherheit](#3-sicherheit)
+  - [104 MUSS Alle Endpunkte absichern](#104-muss-alle-endpunkte-absichern)
+  - [105 MUSS Berechtigungen (Scopes) definieren und zuweisen](#105-muss-berechtigungen-scopes-definieren-und-zuweisen)
+  - [C-06 MUSS Einheitliche Scope-Namenskonvention](#c-06-muss-einheitliche-scope-namenskonvention)
+- [4. Datenformate](#4-datenformate)
+  - [238 MUSS Standarddatenformate verwenden](#238-muss-standarddatenformate-verwenden)
+  - [171 MUSS Format für Zahlen und Integer definieren](#171-muss-format-für-zahlen-und-integer-definieren)
+  - [169 MUSS Standardformate für Datum/Zeit verwenden](#169-muss-standardformate-für-datum-zeit-verwenden)
+  - [255 SOLLTE Geeignete Datum/Zeit-Formate wählen](#255-sollte-geeignete-datum-zeit-formate-wählen)
+  - [127 SOLLTE Standardformate für Zeitdauern verwenden](#127-sollte-standardformate-für-zeitdauern-verwenden)
+  - [170 MUSS Standardformate für Land, Sprache, Währung](#170-muss-standardformate-für-land-sprache-währung)
+  - [244 SOLLTE Content Negotiation unterstützen](#244-sollte-content-negotiation-unterstützen)
+  - [144 SOLLTE UUIDs nur wenn notwendig verwenden](#144-sollte-uuids-nur-wenn-notwendig-verwenden)
+- [5. URLs](#5-urls)
+  - [C-01 MUSS URL-Versionierung verwenden](#c-01-muss-url-versionierung-verwenden)
+  - [134 MUSS Ressourcennamen im Plural](#134-muss-ressourcennamen-im-plural)
+  - [228 MUSS URL-kompatible Ressourcen-IDs](#228-muss-url-kompatible-ressourcen-ids)
+  - [129 MUSS kebab-case für Pfadsegmente](#129-muss-kebab-case-für-pfadsegmente)
+  - [136 MUSS Normalisierte Pfade ohne Trailing Slashes](#136-muss-normalisierte-pfade-ohne-trailing-slashes)
+  - [141 MUSS URLs frei von Verben halten](#141-muss-urls-frei-von-verben-halten)
+  - [138 MUSS Aktionen vermeiden — in Ressourcen denken](#138-muss-aktionen-vermeiden-—-in-ressourcen-denken)
+  - [142 MUSS Domänenspezifische Ressourcennamen](#142-muss-domänenspezifische-ressourcennamen)
+  - [143 MUSS Ressourcen via Pfadsegmente identifizieren](#143-muss-ressourcen-via-pfadsegmente-identifizieren)
+  - [130 MUSS snake_case für Query-Parameter](#130-muss-snake_case-für-query-parameter)
+  - [137 MUSS Konventionelle Query-Parameter verwenden](#137-muss-konventionelle-query-parameter-verwenden)
+  - [135 SOLLTE `/api` nicht als Basispfad](#135-sollte-`-api`-nicht-als-basispfad)
+  - [140 SOLLTE Nützliche und notwendige Ressourcen definieren](#140-sollte-nützliche-und-notwendige-ressourcen-definieren)
+  - [139 SOLLTE Vollständige Geschäftsprozesse modellieren](#139-sollte-vollständige-geschäftsprozesse-modellieren)
+  - [146 SOLLTE Anzahl Ressourcentypen begrenzen](#146-sollte-anzahl-ressourcentypen-begrenzen)
+  - [147 SOLLTE Sub-Ressource-Ebenen begrenzen](#147-sollte-sub-ressource-ebenen-begrenzen)
+  - [145 KANN Verschachtelte URLs in Betracht ziehen](#145-kann-verschachtelte-urls-in-betracht-ziehen)
+  - [241 KANN Zusammengesetzte Schlüssel als Ressourcen-ID](#241-kann-zusammengesetzte-schlüssel-als-ressourcen-id)
+- [6. JSON Payload](#6-json-payload)
+  - [167 MUSS JSON als Datenformat verwenden](#167-muss-json-als-datenformat-verwenden)
+  - [118 MUSS snake_case für Property-Namen (niemals camelCase)](#118-muss-snake_case-für-property-namen-niemals-camelcase)
+  - [C-02 MUSS NICHT Kein HATEOAS](#c-02-muss-nicht-kein-hateoas)
+  - [174 MUSS Gemeinsame Feldnamen verwenden](#174-muss-gemeinsame-feldnamen-verwenden)
+  - [C-07 SOLLTE `metadata`-Feld für erweiterbare Ressourcen](#c-07-sollte-`metadata`-feld-für-erweiterbare-ressourcen)
+  - [C-11 SOLLTE `description` und `metadata` klar trennen](#c-11-sollte-`description`-und-`metadata`-klar-trennen)
+  - [235 SOLLTE `_at`-Suffix für Datum/Zeit-Properties](#235-sollte-`_at`-suffix-für-datum-zeit-properties)
+  - [240 SOLLTE Enum-Werte in UPPER_SNAKE_CASE](#240-sollte-enum-werte-in-upper_snake_case)
+  - [120 SOLLTE Array-Namen im Plural](#120-sollte-array-namen-im-plural)
+  - [123 MUSS Gleiche Semantik für `null` und fehlende Properties](#123-muss-gleiche-semantik-für-`null`-und-fehlende-properties)
+  - [122 MUSS `null` nicht für Boolean-Properties](#122-muss-`null`-nicht-für-boolean-properties)
+  - [124 SOLLTE `null` nicht für leere Arrays](#124-sollte-`null`-nicht-für-leere-arrays)
+  - [216 SOLLTE Maps mit `additionalProperties` definieren](#216-sollte-maps-mit-`additionalproperties`-definieren)
+  - [252 SOLLTE Einheitliches Schema für Lesen und Schreiben](#252-sollte-einheitliches-schema-für-lesen-und-schreiben)
+  - [172 SOLLTE Standard-Medientypen verwenden](#172-sollte-standard-medientypen-verwenden)
+- [7. HTTP-Anfragen](#7-http-anfragen)
+  - [148 MUSS HTTP-Methoden korrekt verwenden](#148-muss-http-methoden-korrekt-verwenden)
+  - [149 MUSS Gemeinsame Methoden-Eigenschaften einhalten](#149-muss-gemeinsame-methoden-eigenschaften-einhalten)
+  - [229 SOLLTE POST und PATCH idempotent gestalten](#229-sollte-post-und-patch-idempotent-gestalten)
+  - [231 SOLLTE Sekundärschlüssel für idempotentes POST](#231-sollte-sekundärschlüssel-für-idempotentes-post)
+  - [253 KANN Asynchrone Anfrageverarbeitung](#253-kann-asynchrone-anfrageverarbeitung)
+  - [154 MUSS Collection-Format für Header und Query-Parameter definieren](#154-muss-collection-format-für-header-und-query-parameter-definieren)
+  - [236 SOLLTE Einfache Filter als Query-Parameter](#236-sollte-einfache-filter-als-query-parameter)
+  - [237 SOLLTE Komplexe Filter als JSON-Body (POST)](#237-sollte-komplexe-filter-als-json-body-post)
+  - [226 MUSS Implizite Response-Filterung dokumentieren](#226-muss-implizite-response-filterung-dokumentieren)
+- [8. HTTP-Statuscodes](#8-http-statuscodes)
+  - [243 MUSS Nur offizielle HTTP-Statuscodes](#243-muss-nur-offizielle-http-statuscodes)
+  - [151 MUSS Alle Statuscodes spezifizieren](#151-muss-alle-statuscodes-spezifizieren)
+  - [150 SOLLTE Nur gebräuchliche Statuscodes verwenden](#150-sollte-nur-gebräuchliche-statuscodes-verwenden)
+  - [220 MUSS Spezifischsten Statuscode verwenden](#220-muss-spezifischsten-statuscode-verwenden)
+  - [152 MUSS Code 207 für Batch/Bulk-Requests](#152-muss-code-207-für-batch-bulk-requests)
+  - [153 MUSS Code 429 mit Retry-After bei Rate Limits](#153-muss-code-429-mit-retry-after-bei-rate-limits)
+  - [176 MUSS Problem JSON für alle Fehler (RFC 7807)](#176-muss-problem-json-für-alle-fehler-rfc-7807)
+  - [177 MUSS Keine Stack Traces in Fehler-Responses](#177-muss-keine-stack-traces-in-fehler-responses)
+  - [251 SOLLTE Keine Weiterleitungs-Codes](#251-sollte-keine-weiterleitungs-codes)
+- [9. HTTP-Header](#9-http-header)
+  - [178 MUSS `Content-*` Header korrekt verwenden](#178-muss-`content-`-header-korrekt-verwenden)
+  - [✦ C-03 / C-04 · MUSS · W3C Trace Context (ersetzt #233 X-Flow-ID)](#c-03-c-04-muss-w3c-trace-context-ersetzt-233-x-flow-id)
+  - [C-05 SOLLTE `trace_id` in 5xx Problem JSON Responses](#c-05-sollte-`trace_id`-in-5xx-problem-json-responses)
+  - [132 SOLLTE kebab-case mit Grossbuchstaben für eigene HTTP-Header](#132-sollte-kebab-case-mit-grossbuchstaben-für-eigene-http-header)
+  - [180 SOLLTE `Location` Header nach POST](#180-sollte-`location`-header-nach-post)
+  - [182 KANN ETag mit If-Match / If-None-Match](#182-kann-etag-mit-if-match-if-none-match)
+  - [230 KANN Idempotency-Key Header](#230-kann-idempotency-key-header)
+  - [181 KANN Prefer Header](#181-kann-prefer-header)
+- [10. Performance](#10-performance)
+  - [227 MUSS Cacheable Endpunkte dokumentieren](#227-muss-cacheable-endpunkte-dokumentieren)
+  - [156 SOLLTE gzip-Komprimierung unterstützen](#156-sollte-gzip-komprimierung-unterstützen)
+  - [157 SOLLTE Partial Responses via Feldauswahl](#157-sollte-partial-responses-via-feldauswahl)
+  - [158 SOLLTE Einbetten von Sub-Ressourcen erlauben](#158-sollte-einbetten-von-sub-ressourcen-erlauben)
+  - [155 SOLLTE Bandbreite reduzieren](#155-sollte-bandbreite-reduzieren)
+- [11. Paginierung](#11-paginierung)
+  - [159 MUSS Paginierung für alle Collection-Ressourcen](#159-muss-paginierung-für-alle-collection-ressourcen)
+  - [160 SOLLTE Cursor-basierte Paginierung bevorzugen](#160-sollte-cursor-basierte-paginierung-bevorzugen)
+  - [248 SOLLTE Standard Pagination Response Object](#248-sollte-standard-pagination-response-object)
+  - [254 SOLLTE Gesamtanzahl vermeiden](#254-sollte-gesamtanzahl-vermeiden)
+- [12. Kompatibilität und Erweiterbarkeit](#12-kompatibilität-und-erweiterbarkeit)
+  - [106 MUSS Keine Breaking Changes](#106-muss-keine-breaking-changes)
+  - [C-10 MUSS Vier Erweiterungsregeln einhalten](#c-10-muss-vier-erweiterungsregeln-einhalten)
+  - [108 MUSS Clients auf Erweiterungen vorbereiten](#108-muss-clients-auf-erweiterungen-vorbereiten)
+  - [110 MUSS JSON-Objekte als Top-Level-Datenstruktur](#110-muss-json-objekte-als-top-level-datenstruktur)
+  - [111 MUSS OpenAPI Spec als erweiterbar behandeln](#111-muss-openapi-spec-als-erweiterbar-behandeln)
+  - [107 SOLLTE Kompatible Erweiterungen bevorzugen](#107-sollte-kompatible-erweiterungen-bevorzugen)
+  - [109 SOLLTE APIs konservativ designen](#109-sollte-apis-konservativ-designen)
+  - [112 SOLLTE Offene Enum-Listen verwenden](#112-sollte-offene-enum-listen-verwenden)
+- [13. Deprecation](#13-deprecation)
+  - [187 MUSS Deprecation in API-Spezifikation markieren](#187-muss-deprecation-in-api-spezifikation-markieren)
+  - [185 MUSS Genehmigung der Konsumenten vor API-Abschaltung](#185-muss-genehmigung-der-konsumenten-vor-api-abschaltung)
+  - [186 MUSS Consent externer Partner](#186-muss-consent-externer-partner)
+  - [188 MUSS Nutzung der deprecated API monitoren](#188-muss-nutzung-der-deprecated-api-monitoren)
+  - [191 MUSS Keine deprecated APIs neu verwenden](#191-muss-keine-deprecated-apis-neu-verwenden)
+  - [189 SOLLTE Deprecation und Sunset Header](#189-sollte-deprecation-und-sunset-header)
+  - [190 SOLLTE Monitoring für Deprecation und Sunset](#190-sollte-monitoring-für-deprecation-und-sunset)
+- [14. Betrieb](#14-betrieb)
+  - [192 MUSS OpenAPI-Spezifikation veröffentlichen](#192-muss-openapi-spezifikation-veröffentlichen)
+  - [193 SOLLTE API-Nutzung monitoren](#193-sollte-api-nutzung-monitoren)
+- [Übersicht: Alle eigenen Regeln](#übersicht-alle-eigenen-regeln)
+- [Entfernte Zalando-interne Regeln](#entfernte-zalando-interne-regeln)
 
 ---
-
-<a name="konventionen"></a>
-## Konventionen
-
-| Begriff | Bedeutung |
-|---|---|
-| **MUSS** | Verpflichtend — keine Ausnahmen |
-| **SOLLTE** | Empfohlen — Abweichungen müssen begründet werden |
-| **KANN** | Optional — nach eigenem Ermessen |
-| ✦ EIGENE REGEL | Unsere Abweichung oder Ergänzung gegenüber Zalando |
-| *(Adidas)* | Regel aus Adidas Guidelines übernommen |
-| *(Stripe)* | Pattern aus Stripe API übernommen |
-
----
-
-<a name="abweichungen"></a>
-## Zusammenfassung unserer Abweichungen gegenüber Zalando
-
-| Zalando-Regel | Original | Unsere Regelung |
-|---|---|---|
-| #113 / #114 / #115 | Media Type Versioning, kein URL-Versioning | ✦ **MUSS** URL-Versionierung: `/v{n}/resource` |
-| #163 / #164 / #165 | HATEOAS optional | ✦ Entfernt — kein HATEOAS, kein `_links`, `href`, `self` |
-| #233 | X-Flow-ID | ✦ Ersetzt durch W3C `traceparent` + `tracestate` (OpenTelemetry) |
-| #223 / #224 | Zalando Functional Naming | Entfernt — Zalando-intern |
-| #183 | Zalando Proprietary Headers | Entfernt — Zalando-intern |
-| #173 / #249 | Zalando Money / Address | Entfernt — Zalando-intern |
-
----
-
-<a name="kap-1"></a>
 ## 1. Allgemeine Richtlinien
 
-<a name="r-100"></a>
-### #100 · MUSS · API-First-Prinzip befolgen
+### 100 MUSS API-First-Prinzip befolgen
 
 APIs müssen **vor** der Implementierung spezifiziert werden — nicht danach. Das bedeutet:
 
@@ -194,8 +175,7 @@ APIs müssen **vor** der Implementierung spezifiziert werden — nicht danach. D
 
 ---
 
-<a name="r-101"></a>
-### #101 · MUSS · API-Spezifikation mit OpenAPI bereitstellen
+### 101 MUSS API-Spezifikation mit OpenAPI bereitstellen
 
 Alle APIs müssen mit **OpenAPI 3.1** als einzelne, in sich geschlossene YAML-Datei spezifiziert werden.
 
@@ -210,10 +190,51 @@ info:
   version: 1.0.0
 ```
 
+#### Was "zusammen mit dem Service deployed" bedeutet
+
+Die OpenAPI-Datei muss zur Laufzeit vom Service selbst erreichbar sein — nicht nur in Git liegen. Der Service exposed einen Endpunkt der die aktuelle Spezifikation zurückgibt:
+
+```
+GET /openapi.yaml     ← Maschinenlesbare Spezifikation
+GET /openapi.json     ← Alternativ als JSON
+GET /docs             ← Optional: Swagger UI für Menschen
+```
+
+**Warum?** Liegt die Spec nur in Git, kann sie veralten — jemand ändert den Code aber vergisst die Spec zu aktualisieren. Als Teil des Deployments ist sie per Definition immer synchron mit der laufenden Version. Ausserdem können API-Gateways (Gravitee), Testframeworks und Client-Generatoren die Spec direkt zur Laufzeit abrufen.
+
+#### Erreichbarkeit der Spec — nach Zielgruppe
+
+Die Erreichbarkeit des `/openapi.yaml`-Endpunkts richtet sich nach der deklarierten `x-audience`:
+
+| Audience | Erreichbarkeit | Absicherung |
+|---|---|---|
+| `external-public` | Öffentlich über Ingress | Kein Auth — bewusste Ausnahme zu #104 |
+| `external-partner` | Öffentlich über Ingress | Kein Auth — bewusste Ausnahme zu #104 |
+| `company-internal` | Nur cluster-intern | Netzwerkseitig eingeschränkt, kein OAuth2 |
+| `business-unit-internal` | Nur cluster-intern | Netzwerkseitig eingeschränkt, kein OAuth2 |
+| `component-internal` | Nur pod-intern / service mesh | Kein externer Zugriff |
+
+> **Ausnahme zu #104:** Der `/openapi.yaml`-Endpunkt ist ein technischer Meta-Endpunkt und MUSS ohne OAuth2-Authentifizierung erreichbar sein. OAuth2 würde automatisierte Tool-Integration (Gravitee Import, Spektral Lint, Client-Generierung) verhindern. Die Erreichbarkeit wird stattdessen netzwerkseitig kontrolliert.
+
+#### In Gravitee / AKS
+
+```yaml
+# Gravitee importiert die Spec direkt vom laufenden Service
+source:
+  url: https://order-service.internal/openapi.yaml
+
+# Kubernetes Ingress — nur für externe APIs öffentlich
+ingress:
+  rules:
+    - path: /openapi.yaml
+      backend: order-service
+    - path: /v1/           # Fachliche Endpunkte — via Gravitee Gateway
+      backend: gravitee-gateway
+```
+
 ---
 
-<a name="r-102"></a>
-### #102 · SOLLTE · API-Benutzerhandbuch bereitstellen
+### 102 SOLLTE API-Benutzerhandbuch bereitstellen
 
 Zusätzlich zur technischen Spezifikation sollte ein Benutzerhandbuch für API-Konsumenten existieren mit:
 
@@ -226,8 +247,7 @@ Das Handbuch wird über `#/externalDocs/url` in der OpenAPI-Spezifikation verlin
 
 ---
 
-<a name="r-103"></a>
-### #103 · MUSS · APIs auf amerikanischem Englisch schreiben
+### 103 MUSS APIs auf amerikanischem Englisch schreiben
 
 Alle API-Bezeichnungen, Beschreibungen, Fehlermeldungen und Dokumentationen müssen auf **US-Englisch** verfasst sein. Das gilt für:
 
@@ -238,8 +258,7 @@ Alle API-Bezeichnungen, Beschreibungen, Fehlermeldungen und Dokumentationen müs
 
 ---
 
-<a name="c-08"></a>
-### ✦ C-08 · MUSS · Minimale API-Oberfläche (YAGNI-Prinzip) *(Adidas)*
+### C-08 MUSS Minimale API-Oberfläche (YAGNI-Prinzip)
 
 Jedes API-Design MUSS auf eine minimale API-Oberfläche abzielen, ohne Produktanforderungen zu vernachlässigen.
 
@@ -259,8 +278,7 @@ GET /v1/orders
 
 ---
 
-<a name="c-09"></a>
-### ✦ C-09 · MUSS · Robustheit nach Postel's Law *(Adidas)*
+### C-09 MUSS Robustheit nach Postel's Law
 
 Jede API-Implementierung und jeder API-Konsument MUSS Postel's Law befolgen:
 
@@ -279,8 +297,7 @@ Dies stärkt Kompatibilität und Erweiterbarkeit des gesamten API-Ökosystems.
 
 ---
 
-<a name="c-12"></a>
-### ✦ C-12 · MUSS · API-Spezifikationen in Git versionieren *(Adidas)*
+### C-12 MUSS API-Spezifikationen in Git versionieren
 
 OpenAPI-Spezifikationen MÜSSEN in einem Versionskontrollsystem (Git) verwaltet werden:
 
@@ -291,11 +308,9 @@ OpenAPI-Spezifikationen MÜSSEN in einem Versionskontrollsystem (Git) verwaltet 
 
 ---
 
-<a name="kap-2"></a>
 ## 2. Meta-Informationen
 
-<a name="r-218"></a>
-### #218 · MUSS · API Meta-Informationen enthalten
+### 218 MUSS API Meta-Informationen enthalten
 
 Jede OpenAPI-Spezifikation muss folgende Pflichtfelder im `info`-Block enthalten:
 
@@ -316,8 +331,7 @@ info:
 
 ---
 
-<a name="r-116"></a>
-### #116 · MUSS · Semantic Versioning verwenden
+### 116 MUSS Semantic Versioning verwenden
 
 Die API-Spec-Version folgt dem Schema `MAJOR.MINOR.PATCH`:
 
@@ -331,8 +345,7 @@ Die API-Spec-Version folgt dem Schema `MAJOR.MINOR.PATCH`:
 
 ---
 
-<a name="r-215"></a>
-### #215 · MUSS · API-Identifier bereitstellen
+### 215 MUSS API-Identifier bereitstellen
 
 Jede API bekommt eine **global eindeutige, unveränderliche UUID** als `x-api-id`. Diese ändert sich nie — auch nicht bei Breaking Changes oder Umbenennung der API.
 
@@ -345,8 +358,7 @@ info:
 
 ---
 
-<a name="r-219"></a>
-### #219 · MUSS · API-Zielgruppe angeben
+### 219 MUSS API-Zielgruppe angeben
 
 Jede API muss ihre Zielgruppe deklarieren. Dies steuert Qualitätsanforderungen, Review-Prozesse und Zugriffsrechte:
 
@@ -365,13 +377,11 @@ info:
 
 ---
 
-<a name="kap-3"></a>
 ## 3. Sicherheit
 
-<a name="r-104"></a>
-### #104 · MUSS · Alle Endpunkte absichern
+### 104 MUSS Alle Endpunkte absichern
 
-Jeder API-Endpunkt muss durch Authentifizierung und Autorisierung geschützt sein. Empfohlene Methoden:
+Jeder fachliche API-Endpunkt muss durch Authentifizierung und Autorisierung geschützt sein. Empfohlene Methoden:
 
 - **OAuth 2.0 mit JWT Bearer Token** (bevorzugt für interne APIs)
 - **OAuth 2.0 Authorization Code Flow** (für externe/Partner-APIs)
@@ -388,10 +398,102 @@ security:
   - BearerAuth: []
 ```
 
+#### Endpunkt-Kategorien und Absicherung
+
+Nicht alle Endpunkte eines Services sind fachliche API-Endpunkte. Es gibt drei Kategorien mit unterschiedlichen Anforderungen:
+
+| Kategorie | Beispiele | Absicherung |
+|---|---|---|
+| **Fachliche Endpunkte** | `GET /v1/orders`, `POST /v1/orders` | MUSS OAuth2/JWT — keine Ausnahme |
+| **Infrastruktur-Endpunkte** | `/health`, `/ready`, `/live`, `/startup` | MUSS öffentlich sein — Ausnahme zu #104 |
+| **Technische Meta-Endpunkte** | `/openapi.yaml`, `/metrics` | Situationsabhängig — siehe unten |
+
+#### Ausnahme: Infrastruktur-Endpunkte
+
+Health-, Readiness-, Liveness- und Startup-Endpunkte MÜSSEN ohne Authentifizierung erreichbar sein:
+
+```
+GET /health    → Liveness:  Läuft der Prozess?
+GET /ready     → Readiness: Kann der Service Traffic annehmen?
+GET /live      → Synonym für Liveness (je nach Framework)
+GET /startup   → Ist die Initialisierung abgeschlossen?
+```
+
+**Warum?** Kubernetes ruft diese Endpunkte ohne Token auf — es gibt keinen Mechanismus einen Bearer Token mitzugeben. Ein gesicherter Health-Check der `401` zurückgibt würde dazu führen, dass Kubernetes den Pod als unhealthy markiert und ihn neu startet.
+
+**Was diese Endpunkte zurückgeben dürfen:**
+
+```json
+// ✓ Richtig — minimale Information
+{ "status": "UP" }
+
+// ✗ Falsch — zu viel interne Information exponiert
+{
+  "status": "UP",
+  "database": "postgresql://internal-db:5432/orders",
+  "build_version": "1.2.3-internal-456",
+  "hostname": "pod-abc123-xyz"
+}
+```
+
+Keine internen Details exponieren — auch öffentliche Endpunkte minimieren die Angriffsfläche.
+
+#### Ausnahme: `/openapi.yaml`
+
+Der Spezifikations-Endpunkt ist ein technischer Meta-Endpunkt ohne OAuth2. Die Erreichbarkeit wird stattdessen netzwerkseitig über die `x-audience` kontrolliert — siehe #101 für Details.
+
+#### Ausnahme: `/metrics`
+
+Prometheus-Metriken enthalten interne Laufzeitdaten (Speicherverbrauch, Request-Raten, Fehlerquoten) und DÜRFEN NICHT öffentlich erreichbar sein. Sie werden netzwerkseitig abgesichert — nur aus dem Cluster erreichbar, nicht über den öffentlichen Ingress:
+
+```yaml
+# Kubernetes NetworkPolicy — /metrics nur cluster-intern
+ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring    # Nur Prometheus-Namespace
+    ports:
+    - port: 9090
+```
+
+#### In der OpenAPI-Spezifikation dokumentieren
+
+Alle Ausnahmen MÜSSEN in der OpenAPI-Spezifikation explizit mit `security: []` (leeres Array = kein Auth) gekennzeichnet sein:
+
+```yaml
+paths:
+  /health:
+    get:
+      summary: Health Check
+      security: []            # Explizit kein Auth — bewusste Ausnahme
+      tags: [Infrastructure]
+      responses:
+        '200':
+          description: Service ist healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [UP, DOWN]
+  /ready:
+    get:
+      summary: Readiness Check
+      security: []            # Explizit kein Auth
+      tags: [Infrastructure]
+      responses:
+        '200':
+          description: Service kann Traffic annehmen
+        '503':
+          description: Service ist noch nicht bereit
+```
+
 ---
 
-<a name="r-105"></a>
-### #105 · MUSS · Berechtigungen (Scopes) definieren und zuweisen
+### 105 MUSS Berechtigungen (Scopes) definieren und zuweisen
 
 Endpunkte, die klassifizierte Daten exponieren, müssen mit Scopes abgesichert werden:
 
@@ -408,8 +510,7 @@ paths:
 
 ---
 
-<a name="c-06"></a>
-### ✦ C-06 · MUSS · Einheitliche Scope-Namenskonvention (löst #225 ab)
+### C-06 MUSS Einheitliche Scope-Namenskonvention
 
 #### Kontext
 
@@ -539,11 +640,9 @@ Scopes werden in Gravitee beim API-Plan definiert und müssen exakt mit der Open
 
 ---
 
-<a name="kap-4"></a>
 ## 4. Datenformate
 
-<a name="r-238"></a>
-### #238 · MUSS · Standarddatenformate verwenden
+### 238 MUSS Standarddatenformate verwenden
 
 Für alle Datentypen müssen die OpenAPI-Standardformate verwendet werden:
 
@@ -564,8 +663,7 @@ Für alle Datentypen müssen die OpenAPI-Standardformate verwendet werden:
 
 ---
 
-<a name="r-171"></a>
-### #171 · MUSS · Format für Zahlen und Integer definieren
+### 171 MUSS Format für Zahlen und Integer definieren
 
 Jede Zahl- oder Integer-Property **muss** ein explizites Format angeben:
 
@@ -586,8 +684,7 @@ properties:
 
 ---
 
-<a name="r-169"></a>
-### #169 · MUSS · Standardformate für Datum/Zeit verwenden
+### 169 MUSS Standardformate für Datum/Zeit verwenden
 
 - Immer **RFC 3339 / ISO 8601** verwenden
 - Datum und Zeit mit grossem `T` trennen
@@ -609,8 +706,7 @@ properties:
 
 ---
 
-<a name="r-255"></a>
-### #255 · SOLLTE · Geeignete Datum/Zeit-Formate wählen
+### 255 SOLLTE Geeignete Datum/Zeit-Formate wählen
 
 | Format | Verwendung | Beispiel |
 |---|---|---|
@@ -621,8 +717,7 @@ properties:
 
 ---
 
-<a name="r-127"></a>
-### #127 · SOLLTE · Standardformate für Zeitdauern verwenden
+### 127 SOLLTE Standardformate für Zeitdauern verwenden
 
 Zeitdauern und Intervalle müssen als ISO 8601 Strings dargestellt werden:
 
@@ -637,8 +732,7 @@ Query-Parameter für Zeitintervalle: `{feld}_between` statt `{feld}_before` + `{
 
 ---
 
-<a name="r-170"></a>
-### #170 · MUSS · Standardformate für Land, Sprache, Währung
+### 170 MUSS Standardformate für Land, Sprache, Währung
 
 | Datentyp | Standard | Format | Beispiel |
 |---|---|---|---|
@@ -649,8 +743,7 @@ Query-Parameter für Zeitintervalle: `{feld}_between` statt `{feld}_before` + `{
 
 ---
 
-<a name="r-244"></a>
-### #244 · SOLLTE · Content Negotiation unterstützen
+### 244 SOLLTE Content Negotiation unterstützen
 
 Wenn eine Ressource in verschiedenen Formaten geliefert werden kann, soll Content Negotiation über Standard-HTTP-Header verwendet werden:
 
@@ -663,18 +756,15 @@ Accept-Encoding: gzip
 
 ---
 
-<a name="r-144"></a>
-### #144 · SOLLTE · UUIDs nur wenn notwendig verwenden
+### 144 SOLLTE UUIDs nur wenn notwendig verwenden
 
 UUIDs sind sinnvoll für dezentrale ID-Generierung ohne Koordination. Sie haben aber Nachteile: schwer lesbar, nicht sortierbar, hoher Speicherverbrauch. Alternativen prüfen, z.B. serverseitige ID-Generierung via POST.
 
 ---
 
-<a name="kap-5"></a>
 ## 5. URLs
 
-<a name="c-01"></a>
-### ✦ C-01 · MUSS · URL-Versionierung verwenden (ersetzt #113, #114, #115)
+### C-01 MUSS URL-Versionierung verwenden
 
 **Jeder API-Pfad muss die Major-Version im Pfad enthalten:**
 
@@ -693,8 +783,7 @@ UUIDs sind sinnvoll für dezentrale ID-Generierung ohne Koordination. Sie haben 
 
 ---
 
-<a name="r-134"></a>
-### #134 · MUSS · Ressourcennamen im Plural
+### 134 MUSS Ressourcennamen im Plural
 
 Ressourcen sind immer im Plural:
 
@@ -706,8 +795,7 @@ Ressourcen sind immer im Plural:
 
 ---
 
-<a name="r-228"></a>
-### #228 · MUSS · URL-kompatible Ressourcen-IDs
+### 228 MUSS URL-kompatible Ressourcen-IDs
 
 IDs in URLs dürfen nur enthalten: `[a-zA-Z0-9:._\-/]*`
 
@@ -715,8 +803,7 @@ Keine Sonderzeichen, keine Leerzeichen, keine leeren Werte.
 
 ---
 
-<a name="r-129"></a>
-### #129 · MUSS · kebab-case für Pfadsegmente
+### 129 MUSS kebab-case für Pfadsegmente
 
 Pfadsegmente bestehen nur aus Kleinbuchstaben und Bindestrichen:
 
@@ -728,8 +815,7 @@ Pfadsegmente bestehen nur aus Kleinbuchstaben und Bindestrichen:
 
 ---
 
-<a name="r-136"></a>
-### #136 · MUSS · Normalisierte Pfade ohne Trailing Slashes
+### 136 MUSS Normalisierte Pfade ohne Trailing Slashes
 
 ```
 /v1/orders/123          ✓
@@ -739,8 +825,7 @@ Pfadsegmente bestehen nur aus Kleinbuchstaben und Bindestrichen:
 
 ---
 
-<a name="r-141"></a>
-### #141 · MUSS · URLs frei von Verben halten
+### 141 MUSS URLs frei von Verben halten
 
 URLs beschreiben **Ressourcen**, nicht **Aktionen**:
 
@@ -755,8 +840,7 @@ POST /v1/cancelOrder         ✗ Verb in URL
 
 ---
 
-<a name="r-138"></a>
-### #138 · MUSS · Aktionen vermeiden — in Ressourcen denken
+### 138 MUSS Aktionen vermeiden — in Ressourcen denken
 
 REST modelliert Ressourcen, nicht Prozeduraufrufe:
 
@@ -767,8 +851,7 @@ POST /v1/articles/{id}/lock          ✗ Aktion
 
 ---
 
-<a name="r-142"></a>
-### #142 · MUSS · Domänenspezifische Ressourcennamen
+### 142 MUSS Domänenspezifische Ressourcennamen
 
 Namen sollen den Geschäftskontext widerspiegeln:
 
@@ -779,8 +862,7 @@ Namen sollen den Geschäftskontext widerspiegeln:
 
 ---
 
-<a name="r-143"></a>
-### #143 · MUSS · Ressourcen via Pfadsegmente identifizieren
+### 143 MUSS Ressourcen via Pfadsegmente identifizieren
 
 ```
 /v1/orders/{order-id}/items/{item-id}
@@ -790,8 +872,7 @@ Jedes Teilsegment muss für sich allein eine gültige Ressource sein.
 
 ---
 
-<a name="r-130"></a>
-### #130 · MUSS · snake_case für Query-Parameter
+### 130 MUSS snake_case für Query-Parameter
 
 ```
 ?page_size=20    ✓
@@ -800,8 +881,7 @@ Jedes Teilsegment muss für sich allein eine gültige Ressource sein.
 
 ---
 
-<a name="r-137"></a>
-### #137 · MUSS · Konventionelle Query-Parameter verwenden
+### 137 MUSS Konventionelle Query-Parameter verwenden
 
 | Parameter | Bedeutung |
 |---|---|
@@ -814,7 +894,7 @@ Jedes Teilsegment muss für sich allein eine gültige Ressource sein.
 
 ---
 
-### #135 · SOLLTE · `/api` nicht als Basispfad
+### 135 SOLLTE `/api` nicht als Basispfad
 
 ```
 /v1/orders          ✓
@@ -823,25 +903,25 @@ Jedes Teilsegment muss für sich allein eine gültige Ressource sein.
 
 ---
 
-### #140 · SOLLTE · Nützliche und notwendige Ressourcen definieren
+### 140 SOLLTE Nützliche und notwendige Ressourcen definieren
 
 Eine Ressource sollte 90% der Anwendungsfälle abdecken. Zu granulare oder zu generische Ressourcen vermeiden. Neue Ressource erst einführen wenn ein konkreter, aktueller Bedarf besteht — nicht auf Vorrat (YAGNI, siehe C-08).
 
 ---
 
-### #139 · SOLLTE · Vollständige Geschäftsprozesse modellieren
+### 139 SOLLTE Vollständige Geschäftsprozesse modellieren
 
 Eine API sollte alle Ressourcen eines Geschäftsprozesses enthalten, damit Clients den Ablauf nachvollziehen können.
 
 ---
 
-### #146 · SOLLTE · Anzahl Ressourcentypen begrenzen
+### 146 SOLLTE Anzahl Ressourcentypen begrenzen
 
 Erfahrungswert: gut designte APIs haben 4–8 Ressourcentypen.
 
 ---
 
-### #147 · SOLLTE · Sub-Ressource-Ebenen begrenzen
+### 147 SOLLTE Sub-Ressource-Ebenen begrenzen
 
 Maximal **3 Ebenen** Verschachtelung:
 
@@ -852,13 +932,13 @@ Maximal **3 Ebenen** Verschachtelung:
 
 ---
 
-### #145 · KANN · Verschachtelte URLs in Betracht ziehen
+### 145 KANN Verschachtelte URLs in Betracht ziehen
 
 Nested URLs nur wenn die Sub-Ressource ohne Elternressource nicht existiert.
 
 ---
 
-### #241 · KANN · Zusammengesetzte Schlüssel als Ressourcen-ID
+### 241 KANN Zusammengesetzte Schlüssel als Ressourcen-ID
 
 ```
 /v1/price-advices/{sku}/{sales-channel}
@@ -866,11 +946,9 @@ Nested URLs nur wenn die Sub-Ressource ohne Elternressource nicht existiert.
 
 ---
 
-<a name="kap-6"></a>
 ## 6. JSON Payload
 
-<a name="r-167"></a>
-### #167 · MUSS · JSON als Datenformat verwenden
+### 167 MUSS JSON als Datenformat verwenden
 
 Alle Request- und Response-Bodies verwenden JSON (RFC 7159):
 
@@ -880,8 +958,7 @@ Alle Request- und Response-Bodies verwenden JSON (RFC 7159):
 
 ---
 
-<a name="r-118"></a>
-### #118 · MUSS · snake_case für Property-Namen (niemals camelCase)
+### 118 MUSS snake_case für Property-Namen (niemals camelCase)
 
 ```json
 // ✓ Richtig
@@ -897,8 +974,7 @@ Regex: `^[a-z_][a-z_0-9]*$`
 
 ---
 
-<a name="c-02"></a>
-### ✦ C-02 · MUSS NICHT · Kein HATEOAS (ersetzt #163, #164, #165)
+### C-02 MUSS NICHT Kein HATEOAS
 
 **Keine** hypermedia controls in Response Bodies:
 
@@ -920,8 +996,7 @@ REST Maturity Level 2 (Ressourcen + HTTP-Methoden). Bestätigt durch Adidas und 
 
 ---
 
-<a name="r-174"></a>
-### #174 · MUSS · Gemeinsame Feldnamen verwenden
+### 174 MUSS Gemeinsame Feldnamen verwenden
 
 | Feldname | Typ | Bedeutung |
 |---|---|---|
@@ -933,8 +1008,7 @@ REST Maturity Level 2 (Ressourcen + HTTP-Methoden). Bestätigt durch Adidas und 
 
 ---
 
-<a name="c-07"></a>
-### ✦ C-07 · SOLLTE · `metadata`-Feld für erweiterbare Ressourcen *(Stripe)*
+### C-07 SOLLTE `metadata`-Feld für erweiterbare Ressourcen
 
 Alle mutierbaren Ressourcen SOLLTEN ein optionales `metadata`-Feld unterstützen für strukturierte Zusatzdaten ohne Breaking Changes:
 
@@ -972,8 +1046,7 @@ metadata:
 
 ---
 
-<a name="c-11"></a>
-### ✦ C-11 · SOLLTE · `description` und `metadata` klar trennen *(Stripe)*
+### C-11 SOLLTE `description` und `metadata` klar trennen
 
 | Feld | Typ | Zweck | Sichtbarkeit |
 |---|---|---|---|
@@ -992,8 +1065,7 @@ Nie Metadaten in `description` schreiben und nie `description` für maschinenles
 
 ---
 
-<a name="r-235"></a>
-### #235 · SOLLTE · `_at`-Suffix für Datum/Zeit-Properties
+### 235 SOLLTE `_at`-Suffix für Datum/Zeit-Properties
 
 ```json
 { "created_at": "2024-01-15T10:30:00Z", "shipped_at": "2024-01-16T08:00:00Z" }
@@ -1001,8 +1073,7 @@ Nie Metadaten in `description` schreiben und nie `description` für maschinenles
 
 ---
 
-<a name="r-240"></a>
-### #240 · SOLLTE · Enum-Werte in UPPER_SNAKE_CASE
+### 240 SOLLTE Enum-Werte in UPPER_SNAKE_CASE
 
 ```yaml
 status:
@@ -1012,8 +1083,7 @@ status:
 
 ---
 
-<a name="r-120"></a>
-### #120 · SOLLTE · Array-Namen im Plural
+### 120 SOLLTE Array-Namen im Plural
 
 ```json
 { "items": [...], "addresses": [...] }
@@ -1021,15 +1091,13 @@ status:
 
 ---
 
-<a name="r-123"></a>
-### #123 · MUSS · Gleiche Semantik für `null` und fehlende Properties
+### 123 MUSS Gleiche Semantik für `null` und fehlende Properties
 
 Fehlendes Feld `{}` und `{"field": null}` müssen identisch behandelt werden — keine unterschiedlichen Semantiken.
 
 ---
 
-<a name="r-122"></a>
-### #122 · MUSS · `null` nicht für Boolean-Properties
+### 122 MUSS `null` nicht für Boolean-Properties
 
 ```json
 // ✗ Falsch
@@ -1041,8 +1109,7 @@ Fehlendes Feld `{}` und `{"field": null}` müssen identisch behandelt werden —
 
 ---
 
-<a name="r-124"></a>
-### #124 · SOLLTE · `null` nicht für leere Arrays
+### 124 SOLLTE `null` nicht für leere Arrays
 
 ```json
 { "items": [] }    // ✓
@@ -1051,8 +1118,7 @@ Fehlendes Feld `{}` und `{"field": null}` müssen identisch behandelt werden —
 
 ---
 
-<a name="r-216"></a>
-### #216 · SOLLTE · Maps mit `additionalProperties` definieren
+### 216 SOLLTE Maps mit `additionalProperties` definieren
 
 ```yaml
 translations:
@@ -1064,15 +1130,13 @@ translations:
 
 ---
 
-<a name="r-252"></a>
-### #252 · SOLLTE · Einheitliches Schema für Lesen und Schreiben
+### 252 SOLLTE Einheitliches Schema für Lesen und Schreiben
 
 Dasselbe Schema für GET und POST/PUT/PATCH — Unterschiede via `readOnly: true` / `writeOnly: true`.
 
 ---
 
-<a name="r-172"></a>
-### #172 · SOLLTE · Standard-Medientypen verwenden
+### 172 SOLLTE Standard-Medientypen verwenden
 
 | Content-Type | Verwendung |
 |---|---|
@@ -1083,11 +1147,9 @@ Dasselbe Schema für GET und POST/PUT/PATCH — Unterschiede via `readOnly: true
 
 ---
 
-<a name="kap-7"></a>
 ## 7. HTTP-Anfragen
 
-<a name="r-148"></a>
-### #148 · MUSS · HTTP-Methoden korrekt verwenden
+### 148 MUSS HTTP-Methoden korrekt verwenden
 
 | Methode | Semantik | Idempotent | Sicher |
 |---|---|---|---|
@@ -1102,23 +1164,20 @@ Dasselbe Schema für GET und POST/PUT/PATCH — Unterschiede via `readOnly: true
 
 ---
 
-<a name="r-149"></a>
-### #149 · MUSS · Gemeinsame Methoden-Eigenschaften einhalten
+### 149 MUSS Gemeinsame Methoden-Eigenschaften einhalten
 
 - **Sicher (Safe):** GET, HEAD — dürfen den Zustand nicht verändern
 - **Idempotent:** GET, PUT, DELETE — mehrfache Ausführung hat denselben Effekt
 
 ---
 
-<a name="r-229"></a>
-### #229 · SOLLTE · POST und PATCH idempotent gestalten
+### 229 SOLLTE POST und PATCH idempotent gestalten
 
 Idempotente POST/PATCH-Requests verhindern Duplikate bei Netzwerkfehlern — via `Idempotency-Key` Header oder Sekundärschlüssel.
 
 ---
 
-<a name="r-231"></a>
-### #231 · SOLLTE · Sekundärschlüssel für idempotentes POST
+### 231 SOLLTE Sekundärschlüssel für idempotentes POST
 
 ```json
 POST /v1/orders
@@ -1132,8 +1191,7 @@ Bei Wiederholung mit gleichem `external_order_id` → dieselbe Bestellung zurüc
 
 ---
 
-<a name="r-253"></a>
-### #253 · KANN · Asynchrone Anfrageverarbeitung
+### 253 KANN Asynchrone Anfrageverarbeitung
 
 Langläufige Operationen können asynchron verarbeitet werden:
 1. `POST /v1/exports` → `202 Accepted` + `Location: /v1/exports/{job-id}`
@@ -1142,8 +1200,7 @@ Langläufige Operationen können asynchron verarbeitet werden:
 
 ---
 
-<a name="r-154"></a>
-### #154 · MUSS · Collection-Format für Header und Query-Parameter definieren
+### 154 MUSS Collection-Format für Header und Query-Parameter definieren
 
 #### Kontext
 
@@ -1293,8 +1350,7 @@ parameters:
 
 ---
 
-<a name="r-236"></a>
-### #236 · SOLLTE · Einfache Filter als Query-Parameter
+### 236 SOLLTE Einfache Filter als Query-Parameter
 
 ```
 GET /v1/orders?status=OPEN&customer_id=abc123
@@ -1303,8 +1359,7 @@ GET /v1/orders?created_at_between=2024-01-01/2024-12-31
 
 ---
 
-<a name="r-237"></a>
-### #237 · SOLLTE · Komplexe Filter als JSON-Body (POST)
+### 237 SOLLTE Komplexe Filter als JSON-Body (POST)
 
 ```json
 POST /v1/orders/search
@@ -1318,32 +1373,27 @@ POST /v1/orders/search
 
 ---
 
-<a name="r-226"></a>
-### #226 · MUSS · Implizite Response-Filterung dokumentieren
+### 226 MUSS Implizite Response-Filterung dokumentieren
 
 Wenn ein Endpunkt automatisch filtert (z.B. nur eigene Daten), muss dies in der Spec dokumentiert sein.
 
 ---
 
-<a name="kap-8"></a>
 ## 8. HTTP-Statuscodes
 
-<a name="r-243"></a>
-### #243 · MUSS · Nur offizielle HTTP-Statuscodes
+### 243 MUSS Nur offizielle HTTP-Statuscodes
 
 Nur Statuscodes aus offiziellen RFCs verwenden. Keine proprietären Codes.
 
 ---
 
-<a name="r-151"></a>
-### #151 · MUSS · Alle Statuscodes spezifizieren
+### 151 MUSS Alle Statuscodes spezifizieren
 
 Jeder Endpunkt muss alle möglichen Statuscodes mit Beispiel-Responses in OpenAPI dokumentiert haben.
 
 ---
 
-<a name="r-150"></a>
-### #150 · SOLLTE · Nur gebräuchliche Statuscodes verwenden
+### 150 SOLLTE Nur gebräuchliche Statuscodes verwenden
 
 | Code | Bedeutung | Verwendung |
 |---|---|---|
@@ -1365,15 +1415,13 @@ Jeder Endpunkt muss alle möglichen Statuscodes mit Beispiel-Responses in OpenAP
 
 ---
 
-<a name="r-220"></a>
-### #220 · MUSS · Spezifischsten Statuscode verwenden
+### 220 MUSS Spezifischsten Statuscode verwenden
 
 `422 Unprocessable Entity` statt generischem `400 Bad Request`, wenn die Syntax korrekt aber die Semantik fehlerhaft ist.
 
 ---
 
-<a name="r-152"></a>
-### #152 · MUSS · Code 207 für Batch/Bulk-Requests
+### 152 MUSS Code 207 für Batch/Bulk-Requests
 
 ```json
 POST /v1/orders/batch → 207 Multi-Status
@@ -1387,8 +1435,7 @@ POST /v1/orders/batch → 207 Multi-Status
 
 ---
 
-<a name="r-153"></a>
-### #153 · MUSS · Code 429 mit Retry-After bei Rate Limits
+### 153 MUSS Code 429 mit Retry-After bei Rate Limits
 
 ```http
 HTTP/1.1 429 Too Many Requests
@@ -1405,8 +1452,7 @@ Content-Type: application/problem+json
 
 ---
 
-<a name="r-176"></a>
-### #176 · MUSS · Problem JSON für alle Fehler (RFC 7807)
+### 176 MUSS Problem JSON für alle Fehler (RFC 7807)
 
 ```json
 {
@@ -1430,25 +1476,21 @@ Content-Type: application/problem+json
 
 ---
 
-<a name="r-177"></a>
-### #177 · MUSS · Keine Stack Traces in Fehler-Responses
+### 177 MUSS Keine Stack Traces in Fehler-Responses
 
 Stack Traces, Datenbankfehler oder interne Pfade dürfen niemals in Fehler-Responses erscheinen.
 
 ---
 
-<a name="r-251"></a>
-### #251 · SOLLTE · Keine Weiterleitungs-Codes
+### 251 SOLLTE Keine Weiterleitungs-Codes
 
 `301`, `302`, `307`, `308` nach Möglichkeit vermeiden. Korrekte URLs direkt zurückgeben.
 
 ---
 
-<a name="kap-9"></a>
 ## 9. HTTP-Header
 
-<a name="r-178"></a>
-### #178 · MUSS · `Content-*` Header korrekt verwenden
+### 178 MUSS `Content-*` Header korrekt verwenden
 
 ```http
 Content-Type: application/json
@@ -1458,7 +1500,6 @@ Content-Encoding: gzip
 
 ---
 
-<a name="c-03-04"></a>
 ### ✦ C-03 / C-04 · MUSS · W3C Trace Context (ersetzt #233 X-Flow-ID)
 
 **Jeder Service MUSS den `traceparent`-Header propagieren:**
@@ -1484,8 +1525,7 @@ tracestate:  company=backend-service
 
 ---
 
-<a name="c-05"></a>
-### ✦ C-05 · SOLLTE · `trace_id` in 5xx Problem JSON Responses
+### C-05 SOLLTE `trace_id` in 5xx Problem JSON Responses
 
 ```json
 {
@@ -1500,8 +1540,7 @@ Die `trace_id` wird aus dem `traceparent`-Header extrahiert (die 32-stellige Hex
 
 ---
 
-<a name="r-132"></a>
-### #132 · SOLLTE · kebab-case mit Grossbuchstaben für eigene HTTP-Header
+### 132 SOLLTE kebab-case mit Grossbuchstaben für eigene HTTP-Header
 
 ```
 Content-Type        ✓ Standard
@@ -1511,8 +1550,7 @@ X-Request-Id        ✓ Eigene Header in Title-Case
 
 ---
 
-<a name="r-180"></a>
-### #180 · SOLLTE · `Location` Header nach POST
+### 180 SOLLTE `Location` Header nach POST
 
 ```http
 HTTP/1.1 201 Created
@@ -1521,8 +1559,7 @@ Location: /v1/orders/abc123
 
 ---
 
-<a name="r-182"></a>
-### #182 · KANN · ETag mit If-Match / If-None-Match
+### 182 KANN ETag mit If-Match / If-None-Match
 
 ```http
 GET /v1/orders/123 → ETag: "abc123def456"
@@ -1534,8 +1571,7 @@ If-Match: "abc123def456"   # Schlägt fehl wenn zwischenzeitlich geändert
 
 ---
 
-<a name="r-230"></a>
-### #230 · KANN · Idempotency-Key Header
+### 230 KANN Idempotency-Key Header
 
 ```http
 POST /v1/orders
@@ -1544,8 +1580,7 @@ Idempotency-Key: 7f7e3c1a-4b8d-4f6e-9a2b-1c3d5e7f9a0b
 
 ---
 
-<a name="r-181"></a>
-### #181 · KANN · Prefer Header
+### 181 KANN Prefer Header
 
 ```http
 Prefer: return=minimal          # Nur Statuscode, kein Body
@@ -1555,11 +1590,9 @@ Prefer: respond-async           # Asynchrone Verarbeitung
 
 ---
 
-<a name="kap-10"></a>
 ## 10. Performance
 
-<a name="r-227"></a>
-### #227 · MUSS · Cacheable Endpunkte dokumentieren
+### 227 MUSS Cacheable Endpunkte dokumentieren
 
 ```http
 Cache-Control: max-age=3600, must-revalidate
@@ -1568,8 +1601,7 @@ Cache-Control: no-cache
 
 ---
 
-<a name="r-156"></a>
-### #156 · SOLLTE · gzip-Komprimierung unterstützen
+### 156 SOLLTE gzip-Komprimierung unterstützen
 
 ```http
 Accept-Encoding: gzip       # Request
@@ -1578,8 +1610,7 @@ Content-Encoding: gzip      # Response
 
 ---
 
-<a name="r-157"></a>
-### #157 · SOLLTE · Partial Responses via Feldauswahl
+### 157 SOLLTE Partial Responses via Feldauswahl
 
 ```
 GET /v1/orders?fields=id,status,created_at
@@ -1587,8 +1618,7 @@ GET /v1/orders?fields=id,status,created_at
 
 ---
 
-<a name="r-158"></a>
-### #158 · SOLLTE · Einbetten von Sub-Ressourcen erlauben
+### 158 SOLLTE Einbetten von Sub-Ressourcen erlauben
 
 ```
 GET /v1/orders/123?embed=items
@@ -1597,25 +1627,21 @@ GET /v1/orders/123?embed=items
 
 ---
 
-<a name="r-155"></a>
-### #155 · SOLLTE · Bandbreite reduzieren
+### 155 SOLLTE Bandbreite reduzieren
 
 Kombination aus Komprimierung, Feldauswahl und Caching für minimale Datenübertragung.
 
 ---
 
-<a name="kap-11"></a>
 ## 11. Paginierung
 
-<a name="r-159"></a>
-### #159 · MUSS · Paginierung für alle Collection-Ressourcen
+### 159 MUSS Paginierung für alle Collection-Ressourcen
 
 Jeder Endpunkt, der eine Liste zurückgibt, muss Paginierung unterstützen. Keine unlimitierten Responses.
 
 ---
 
-<a name="r-160"></a>
-### #160 · SOLLTE · Cursor-basierte Paginierung bevorzugen
+### 160 SOLLTE Cursor-basierte Paginierung bevorzugen
 
 Cursor-basierte Paginierung ist stabiler als Offset (keine doppelten/fehlenden Einträge bei gleichzeitigen Änderungen):
 
@@ -1637,8 +1663,7 @@ GET /v1/orders?cursor=eyJpZCI6ImFiYzEyMyJ9&limit=20
 
 ---
 
-<a name="r-248"></a>
-### #248 · SOLLTE · Standard Pagination Response Object
+### 248 SOLLTE Standard Pagination Response Object
 
 ```json
 {
@@ -1652,18 +1677,15 @@ GET /v1/orders?cursor=eyJpZCI6ImFiYzEyMyJ9&limit=20
 
 ---
 
-<a name="r-254"></a>
-### #254 · SOLLTE · Gesamtanzahl vermeiden
+### 254 SOLLTE Gesamtanzahl vermeiden
 
 `total_count` vermeiden — teuer bei grossen Datensätzen. Cursor für Navigation verwenden.
 
 ---
 
-<a name="kap-12"></a>
 ## 12. Kompatibilität und Erweiterbarkeit
 
-<a name="r-106"></a>
-### #106 · MUSS · Keine Breaking Changes
+### 106 MUSS Keine Breaking Changes
 
 Bestehende API-Konsumenten dürfen nicht ohne Abstimmung brechen. Breaking Changes erfordern eine neue Major Version.
 
@@ -1684,8 +1706,7 @@ Bestehende API-Konsumenten dürfen nicht ohne Abstimmung brechen. Breaking Chang
 
 ---
 
-<a name="c-10"></a>
-### ✦ C-10 · MUSS · Vier Erweiterungsregeln einhalten *(Adidas)*
+### C-10 MUSS Vier Erweiterungsregeln einhalten
 
 Jede Änderung an einer bestehenden API MUSS diese vier Regeln einhalten:
 
@@ -1698,15 +1719,13 @@ Jede Änderung an einer bestehenden API MUSS diese vier Regeln einhalten:
 
 ---
 
-<a name="r-108"></a>
-### #108 · MUSS · Clients auf Erweiterungen vorbereiten
+### 108 MUSS Clients auf Erweiterungen vorbereiten
 
 Clients müssen so implementiert werden, dass sie unbekannte Properties ignorieren (Tolerant Reader Pattern nach Postel's Law, siehe C-09).
 
 ---
 
-<a name="r-110"></a>
-### #110 · MUSS · JSON-Objekte als Top-Level-Datenstruktur
+### 110 MUSS JSON-Objekte als Top-Level-Datenstruktur
 
 ```json
 // ✓ Richtig
@@ -1720,22 +1739,19 @@ Clients müssen so implementiert werden, dass sie unbekannte Properties ignorier
 
 ---
 
-<a name="r-111"></a>
-### #111 · MUSS · OpenAPI Spec als erweiterbar behandeln
+### 111 MUSS OpenAPI Spec als erweiterbar behandeln
 
 Neue optionale Properties, Endpunkte und Enum-Werte können jederzeit hinzugefügt werden.
 
 ---
 
-<a name="r-107"></a>
-### #107 · SOLLTE · Kompatible Erweiterungen bevorzugen
+### 107 SOLLTE Kompatible Erweiterungen bevorzugen
 
 Neue Funktionalität als optionale Erweiterungen hinzufügen, die bestehende Konsumenten ignorieren können.
 
 ---
 
-<a name="r-109"></a>
-### #109 · SOLLTE · APIs konservativ designen
+### 109 SOLLTE APIs konservativ designen
 
 - So wenig wie nötig exponieren (siehe C-08 YAGNI)
 - Unnötige Flexibilität vermeidet Komplexität
@@ -1743,8 +1759,7 @@ Neue Funktionalität als optionale Erweiterungen hinzufügen, die bestehende Kon
 
 ---
 
-<a name="r-112"></a>
-### #112 · SOLLTE · Offene Enum-Listen verwenden
+### 112 SOLLTE Offene Enum-Listen verwenden
 
 ```yaml
 status:
@@ -1758,11 +1773,9 @@ status:
 
 ---
 
-<a name="kap-13"></a>
 ## 13. Deprecation
 
-<a name="r-187"></a>
-### #187 · MUSS · Deprecation in API-Spezifikation markieren
+### 187 MUSS Deprecation in API-Spezifikation markieren
 
 ```yaml
 paths:
@@ -1776,36 +1789,31 @@ paths:
 
 ---
 
-<a name="r-185"></a>
-### #185 · MUSS · Genehmigung der Konsumenten vor API-Abschaltung
+### 185 MUSS Genehmigung der Konsumenten vor API-Abschaltung
 
 Alle bekannten Konsumenten müssen informiert werden und dem Migrationszeitplan zustimmen.
 
 ---
 
-<a name="r-186"></a>
-### #186 · MUSS · Consent externer Partner
+### 186 MUSS Consent externer Partner
 
 Externe Partner müssen dem Deprecation-Zeitplan explizit zustimmen.
 
 ---
 
-<a name="r-188"></a>
-### #188 · MUSS · Nutzung der deprecated API monitoren
+### 188 MUSS Nutzung der deprecated API monitoren
 
 Tatsächliche Nutzung messen, um sicherzustellen dass alle Konsumenten migriert haben.
 
 ---
 
-<a name="r-191"></a>
-### #191 · MUSS · Keine deprecated APIs neu verwenden
+### 191 MUSS Keine deprecated APIs neu verwenden
 
 Neue Services dürfen keine als deprecated markierten Endpunkte verwenden.
 
 ---
 
-<a name="r-189"></a>
-### #189 · SOLLTE · Deprecation und Sunset Header
+### 189 SOLLTE Deprecation und Sunset Header
 
 ```http
 Deprecation: true
@@ -1815,18 +1823,15 @@ Link: <https://api.example.com/v2/orders>; rel="successor-version"
 
 ---
 
-<a name="r-190"></a>
-### #190 · SOLLTE · Monitoring für Deprecation und Sunset
+### 190 SOLLTE Monitoring für Deprecation und Sunset
 
 Alerts wenn Sunset-Datum näher rückt und noch aktive Konsumenten vorhanden sind.
 
 ---
 
-<a name="kap-14"></a>
 ## 14. Betrieb
 
-<a name="r-192"></a>
-### #192 · MUSS · OpenAPI-Spezifikation veröffentlichen
+### 192 MUSS OpenAPI-Spezifikation veröffentlichen
 
 ```
 GET /openapi.yaml    # Spezifikation abrufbar
@@ -1835,8 +1840,7 @@ GET /docs            # Optional: Swagger UI
 
 ---
 
-<a name="r-193"></a>
-### #193 · SOLLTE · API-Nutzung monitoren
+### 193 SOLLTE API-Nutzung monitoren
 
 - Requests pro Endpunkt und Statuscode
 - Latenz (p50, p95, p99)
@@ -1845,7 +1849,6 @@ GET /docs            # Optional: Swagger UI
 
 ---
 
-<a name="eigene-regeln"></a>
 ## Übersicht: Alle eigenen Regeln
 
 | ID | Level | Regel | Quelle | Ersetzt |
@@ -1865,7 +1868,6 @@ GET /docs            # Optional: Swagger UI
 
 ---
 
-<a name="entfernte-regeln"></a>
 ## Entfernte Zalando-interne Regeln
 
 | #ID | Grund |
@@ -1881,6 +1883,7 @@ GET /docs            # Optional: Swagger UI
 
 *Version 2.0 — Basiert auf Zalando, Adidas und Stripe API Guidelines*  
 *Quercheck: [Stripe API](https://docs.stripe.com/api) · [Adidas Guidelines](https://adidas.gitbook.io/api-guidelines)*
+
 
 
 
