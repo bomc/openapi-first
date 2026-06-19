@@ -25,6 +25,712 @@ bomc:
 ```
 ---
 
+# Idempotenz, Sicherheit und Caching von HTTP-Methoden — Leitfaden für Entwickler
+
+> Basierend auf den Regeln #148, #149, #229, #230, #231, #182, #253, #227, #155, #156, #157, #158 des REST API Styleguides.
+
+-----
+
+## Warum Idempotenz und Sicherheit wichtig sind
+
+In verteilten Systemen sind Netzwerkfehler keine Ausnahme — sie sind ein normaler Betriebszustand. Ein Request wird abgeschickt, die Verbindung bricht ab, und der aufrufende Dienst weiss nicht ob der Request den Server erreicht hat oder nicht. Was passiert bei einer Wiederholung?
+
+Ist die Operation idempotent, kann der Request bedenkenlos wiederholt werden — das Ergebnis ist dasselbe wie beim ersten Aufruf. Ist sie es nicht, entsteht ein Duplikat: eine zweite Bestellung, eine doppelte Zahlung, ein mehrfach versendetes E-Mail.
+
+Die Eigenschaften Safe und Idempotent sind keine optionalen Qualitätsmerkmale. Sie sind Teil des HTTP-Standards und werden von Infrastruktur-Komponenten wie Load Balancern, Proxies, Gateways und Client-Bibliotheken genutzt um Requests korrekt zu behandeln. Eine Verletzung dieser Eigenschaften führt zu unerwartetem Verhalten das schwer zu debuggen ist.
+
+-----
+
+## Safe — Methoden die keinen Zustand ändern (#149)
+
+Eine HTTP-Methode gilt als **sicher (safe)** wenn ihre Ausführung den Serverzustand nicht verändert. Sichere Methoden sind reine Lesezugriffe — unabhängig davon wie oft sie aufgerufen werden, bleibt der Zustand des Systems unverändert.
+
+Nach Regel **#149** sind `GET` und `HEAD` safe.
+
+```
+GET /v1/orders/ord_abc123      ← Sicher: liest nur, ändert nichts
+HEAD /v1/orders/ord_abc123     ← Sicher: wie GET, gibt nur Header zurück
+```
+
+Konsequenzen der Safe-Eigenschaft für die Implementierung:
+
+**Caching ist erlaubt.** Proxies, Gateways und Browser-Caches dürfen GET-Responses cachen und zwischenspeichern. Eine Implementierung die bei GET tatsächlich Daten verändert, würde gecachte Responses liefern und die Änderung nicht ausführen.
+
+**Automatische Wiederholung ist erlaubt.** HTTP-Clients und Load Balancer dürfen fehlgeschlagene GET-Requests automatisch wiederholen, ohne Rückfrage. Wenn GET Daten verändert, führt das zu unbeabsichtigten Mehrfachausführungen.
+
+**Parallele Ausführung ist unbedenklich.** Mehrere gleichzeitige GET-Requests auf dieselbe Ressource verursachen keine Race Conditions.
+
+Ein GET-Endpunkt der intern einen Zähler inkrementiert, eine E-Mail versendet oder einen Datenbankwert ändert, verletzt die Safe-Eigenschaft — auch wenn es im Einzelfall praktisch erscheint.
+
+-----
+
+## Idempotenz — Mehrfachausführung ohne Nebeneffekte (#149)
+
+Eine HTTP-Methode gilt als **idempotent** wenn mehrfache identische Ausführungen dasselbe Ergebnis liefern wie eine einzige Ausführung. Der Zustand des Systems ist nach dem zehnten Aufruf identisch mit dem Zustand nach dem ersten.
+
+Nach Regel **#149** sind `GET`, `HEAD`, `PUT` und `DELETE` idempotent.
+
+```
+GET  /v1/orders/ord_abc123    ← Idempotent: beliebig oft wiederholbar
+PUT  /v1/orders/ord_abc123    ← Idempotent: setzt Ressource auf definierten Zustand
+DELETE /v1/orders/ord_abc123  ← Idempotent: nach dem ersten Aufruf ist die Ressource weg,
+                                  weitere Aufrufe ändern daran nichts (→ 404 oder 200)
+```
+
+Wichtig: Idempotenz beschreibt den **Zustand des Systems**, nicht die **HTTP-Response**. Ein zweiter DELETE-Aufruf auf eine bereits gelöschte Ressource kann `404 Not Found` zurückgeben — das ist korrekt, weil der Systemzustand (Ressource gelöscht) nach dem ersten wie nach dem zehnten Aufruf identisch ist.
+
+### PUT — vollständiges Ersetzen
+
+PUT ersetzt eine Ressource vollständig durch den übermittelten Zustand. Das macht PUT inhärent idempotent: egal wie oft derselbe PUT-Request ausgeführt wird, die Ressource hat danach immer denselben Zustand.
+
+```http
+PUT /v1/orders/ord_abc123
+Content-Type: application/json
+
+{
+  "status": "CANCELLED",
+  "cancellation_reason": "Customer request",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+```http
+HTTP/1.1 200 OK
+
+{
+  "id": "ord_abc123",
+  "status": "CANCELLED",
+  "cancellation_reason": "Customer request",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+Wird derselbe Request ein zweites Mal gesendet, ist das Ergebnis identisch. PUT darf nicht für partielle Updates verwendet werden — das ist die Domäne von PATCH.
+
+### DELETE — idempotente Löschung
+
+DELETE ist idempotent: nach dem ersten erfolgreichen Aufruf ist die Ressource nicht mehr vorhanden. Weitere Aufrufe ändern daran nichts. Wie mit dem `404`-Statuscode bei wiederholten DELETE-Aufrufen umgegangen wird, ist eine Implementierungsentscheidung:
+
+```http
+DELETE /v1/orders/ord_abc123
+→ 204 No Content       ← Erster Aufruf: Ressource gelöscht
+
+DELETE /v1/orders/ord_abc123
+→ 404 Not Found        ← Zweiter Aufruf: Ressource existiert nicht mehr
+→ 204 No Content       ← Alternativ: ebenfalls akzeptabel (idempotentes Verhalten)
+```
+
+Beide Varianten sind korrekt. `404` ist semantisch präziser, `204` vereinfacht die Fehlerbehandlung auf Konsumentenseite da keine Unterscheidung zwischen erstem und weiteren Aufrufen nötig ist.
+
+-----
+
+## POST und PATCH — nicht idempotent (#148)
+
+`POST` und `PATCH` sind nach HTTP-Standard nicht idempotent. Das hat direkte Konsequenzen:
+
+**POST** erstellt eine neue Ressource. Jeder Aufruf erzeugt eine neue Ressource mit einer neuen ID. Zwei identische POST-Requests erzeugen zwei Bestellungen.
+
+**PATCH** ändert eine Ressource partiell. Abhängig von der Implementierung kann PATCH nicht idempotent sein — zum Beispiel wenn ein Feld inkrementiert wird:
+
+```json
+PATCH /v1/accounts/acc_123
+{ "balance_delta": 100 }     ← Nicht idempotent: jeder Aufruf addiert 100
+```
+
+Die fehlende Idempotenz bedeutet: bei Netzwerkfehlern und Timeouts kann nicht einfach wiederholt werden. Der aufrufende Dienst muss selbst entscheiden ob der ursprüngliche Request den Server erreicht hat oder nicht.
+
+-----
+
+## Idempotentes POST und PATCH gestalten (#229)
+
+Da Netzwerkfehler unvermeidbar sind, empfiehlt Regel **#229**: POST und PATCH SOLLTEN idempotent gestaltet werden. Dafür stehen zwei Mechanismen zur Verfügung.
+
+### Mechanismus 1 — Sekundärschlüssel (#231)
+
+Der aufrufende Dienst übermittelt einen fachlichen Schlüssel der die Anfrage eindeutig identifiziert. Der Server prüft ob ein Eintrag mit diesem Schlüssel bereits existiert — wenn ja, wird die bestehende Ressource zurückgegeben statt eine neue zu erstellen:
+
+```http
+POST /v1/orders
+Content-Type: application/json
+
+{
+  "external_order_id": "ERP-2024-00847",
+  "items": [
+    { "product_id": "prod_abc", "quantity": 2 }
+  ],
+  "delivery_date": "2024-02-15"
+}
+```
+
+```http
+HTTP/1.1 201 Created
+Location: /v1/orders/ord_abc123
+
+{
+  "id": "ord_abc123",
+  "external_order_id": "ERP-2024-00847",
+  "status": "OPEN"
+}
+```
+
+Wird derselbe Request mit demselben `external_order_id` wiederholt — sei es durch einen Retry nach Timeout oder einen Programmfehler — gibt der Server die bereits existierende Bestellung zurück:
+
+```http
+POST /v1/orders
+{ "external_order_id": "ERP-2024-00847", ... }
+
+HTTP/1.1 200 OK              ← 200 statt 201: Ressource existierte bereits
+Location: /v1/orders/ord_abc123
+
+{
+  "id": "ord_abc123",
+  "external_order_id": "ERP-2024-00847",
+  "status": "OPEN"
+}
+```
+
+Der Sekundärschlüssel ist ein fachlicher Wert aus der Domäne des aufrufenden Dienstes — eine Bestellnummer aus dem ERP-System, eine Referenz aus einem externen Prozess. Er wird in der OpenAPI-Spezifikation als optionales Feld definiert, das serverseitig auf Eindeutigkeit geprüft wird.
+
+```yaml
+components:
+  schemas:
+    OrderRequest:
+      type: object
+      required: [items]
+      properties:
+        external_order_id:
+          type: string
+          maxLength: 100
+          description: |
+            Optional client-provided identifier for idempotency.
+            If an order with this external_order_id already exists,
+            the existing order is returned instead of creating a new one.
+          example: "ERP-2024-00847"
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+```
+
+### Mechanismus 2 — Idempotency-Key Header (#230)
+
+Alternativ zum Sekundärschlüssel im Request-Body kann der `Idempotency-Key` Header verwendet werden. Der aufrufende Dienst generiert eine UUID und sendet sie als Header mit:
+
+```http
+POST /v1/orders
+Idempotency-Key: 7f7e3c1a-4b8d-4f6e-9a2b-1c3d5e7f9a0b
+Content-Type: application/json
+
+{
+  "items": [
+    { "product_id": "prod_abc", "quantity": 2 }
+  ]
+}
+```
+
+Der Server speichert den `Idempotency-Key` zusammen mit dem Request-Ergebnis. Kommt derselbe Key erneut, wird das gespeicherte Ergebnis zurückgegeben ohne den Request erneut auszuführen:
+
+```http
+POST /v1/orders
+Idempotency-Key: 7f7e3c1a-4b8d-4f6e-9a2b-1c3d5e7f9a0b
+
+HTTP/1.1 200 OK
+Idempotency-Key: 7f7e3c1a-4b8d-4f6e-9a2b-1c3d5e7f9a0b
+
+{
+  "id": "ord_abc123",
+  "status": "OPEN"
+}
+```
+
+Der Unterschied zum Sekundärschlüssel: der `Idempotency-Key` ist ein technischer, nicht fachlicher Schlüssel. Er wird vom aufrufenden Dienst generiert — typischerweise eine UUID v4 — und hat keine Bedeutung ausserhalb der Idempotenz-Semantik. Er eignet sich besonders wenn kein natürlicher fachlicher Schlüssel vorhanden ist.
+
+**Gültigkeitsdauer:** Idempotency-Keys werden typischerweise 24 Stunden gespeichert. Danach ist keine Garantie mehr gegeben dass ein wiederholter Request dasselbe Ergebnis liefert.
+
+**Verhalten bei unterschiedlichem Body:** Wird derselbe `Idempotency-Key` mit einem anderen Request-Body gesendet, gibt der Server `422 Unprocessable Entity` zurück:
+
+```http
+POST /v1/orders
+Idempotency-Key: 7f7e3c1a-4b8d-4f6e-9a2b-1c3d5e7f9a0b
+
+{
+  "items": [{ "product_id": "prod_xyz", "quantity": 5 }]   ← Anderer Body
+}
+
+HTTP/1.1 422 Unprocessable Entity
+{
+  "type": "https://api.example.com/errors/idempotency-conflict",
+  "title": "Idempotency Key Conflict",
+  "status": 422,
+  "detail": "The Idempotency-Key was already used with a different request body."
+}
+```
+
+### Sekundärschlüssel vs. Idempotency-Key
+
+|               |Sekundärschlüssel (#231)                  |Idempotency-Key (#230)             |
+|---------------|------------------------------------------|-----------------------------------|
+|Herkunft       |Fachlicher Wert des aufrufenden Dienstes  |Technisch generierte UUID          |
+|Sichtbarkeit   |Im Request-Body, Teil der Ressource       |HTTP-Header, nicht im Body         |
+|Dauerhaftigkeit|Permanent — Ressource behält den Schlüssel|Temporär — 24 Stunden              |
+|Geeignet wenn  |Natürlicher fachlicher Schlüssel vorhanden|Kein fachlicher Schlüssel vorhanden|
+|OpenAPI        |Als Property im Schema definiert          |Als Header-Parameter definiert     |
+
+-----
+
+## Optimistisches Locking mit ETag (#182)
+
+Idempotenz allein löst nicht alle Probleme bei gleichzeitigen Zugriffen. Wenn zwei Prozesse dieselbe Ressource gleichzeitig ändern, kann die Änderung des ersten Prozesses durch den zweiten überschrieben werden — ohne dass einer der beiden davon weiss. Das ist das Lost-Update-Problem.
+
+ETag mit If-Match löst dieses Problem. Der Server sendet mit jeder GET-Response einen `ETag`-Header — einen Hashwert der den aktuellen Zustand der Ressource repräsentiert:
+
+```http
+GET /v1/orders/ord_abc123
+
+HTTP/1.1 200 OK
+ETag: "a1b2c3d4e5f6"
+
+{
+  "id": "ord_abc123",
+  "status": "OPEN",
+  "etag": "a1b2c3d4e5f6"
+}
+```
+
+Der ETag-Wert wird im Response-Body als `etag`-Feld (nach #174) und im `ETag`-Header gleichzeitig geliefert. Beim nächsten schreibenden Zugriff sendet der aufrufende Dienst den ETag im `If-Match`-Header zurück:
+
+```http
+PUT /v1/orders/ord_abc123
+If-Match: "a1b2c3d4e5f6"
+Content-Type: application/json
+
+{
+  "status": "CANCELLED",
+  "cancellation_reason": "Customer request"
+}
+```
+
+Der Server prüft ob der aktuelle ETag der Ressource mit dem übermittelten übereinstimmt. Stimmen sie überein, hat sich die Ressource seit dem letzten Lesen nicht verändert — die Änderung wird durchgeführt:
+
+```http
+HTTP/1.1 200 OK
+ETag: "x7y8z9a0b1c2"
+
+{
+  "id": "ord_abc123",
+  "status": "CANCELLED",
+  "etag": "x7y8z9a0b1c2"
+}
+```
+
+Hat ein anderer Prozess die Ressource zwischenzeitlich geändert, stimmt der ETag nicht mehr überein. Der Server antwortet mit `409 Conflict`:
+
+```http
+HTTP/1.1 409 Conflict
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.example.com/errors/optimistic-locking-conflict",
+  "title": "Optimistic Locking Conflict",
+  "status": 409,
+  "detail": "The resource was modified since it was last read. Please fetch the current version and retry.",
+  "instance": "/v1/orders/ord_abc123"
+}
+```
+
+Der aufrufende Dienst muss in diesem Fall die Ressource erneut lesen, die Änderung auf die aktuelle Version anwenden und den Request mit dem neuen ETag wiederholen.
+
+### If-None-Match für bedingte Reads
+
+`If-None-Match` ist die Read-Variante des bedingten Zugriffs. Wenn der aufrufende Dienst bereits eine Version der Ressource kennt und nur eine aktualisierte Version benötigt, sendet er den bekannten ETag mit:
+
+```http
+GET /v1/orders/ord_abc123
+If-None-Match: "a1b2c3d4e5f6"
+```
+
+Hat sich die Ressource nicht verändert, antwortet der Server mit `304 Not Modified` ohne Body — das spart Bandbreite:
+
+```http
+HTTP/1.1 304 Not Modified
+ETag: "a1b2c3d4e5f6"
+```
+
+Hat sich die Ressource verändert, wird die vollständige aktuelle Version zurückgegeben:
+
+```http
+HTTP/1.1 200 OK
+ETag: "x7y8z9a0b1c2"
+
+{ "id": "ord_abc123", "status": "CANCELLED", ... }
+```
+
+-----
+
+## Asynchrone Operationen und Idempotenz (#253)
+
+Langläufige Operationen — Exports, Massenupdates, Berechnungen — werden asynchron verarbeitet. Das Muster:
+
+```http
+POST /v1/exports
+Idempotency-Key: 9a8b7c6d-5e4f-3a2b-1c0d-e9f8a7b6c5d4
+Content-Type: application/json
+
+{
+  "filter": { "status": "COMPLETED", "created_at": { "gte": "2024-01-01" } },
+  "format": "CSV"
+}
+
+HTTP/1.1 202 Accepted
+Location: /v1/exports/exp_xyz789
+
+{
+  "id": "exp_xyz789",
+  "status": "PENDING"
+}
+```
+
+Der `Idempotency-Key` ist auch bei asynchronen Operationen wichtig: Wird der POST wiederholt bevor das Ergebnis abgerufen wurde, wird kein zweiter Export-Job gestartet — der bestehende Job wird zurückgegeben.
+
+Der Status des Jobs wird über den zurückgegebenen `Location`-Header abgerufen:
+
+```http
+GET /v1/exports/exp_xyz789
+
+HTTP/1.1 200 OK
+
+{
+  "id": "exp_xyz789",
+  "status": "COMPLETED",
+  "download_url": "https://storage.example.com/exports/exp_xyz789.csv",
+  "expires_at": "2024-01-16T10:30:00Z"
+}
+```
+
+Der GET-Request auf den Job-Status ist safe und idempotent — er kann beliebig oft wiederholt werden ohne Nebeneffekte.
+
+-----
+
+## OpenAPI-Spezifikation
+
+Idempotenz-Mechanismen müssen in der OpenAPI-Spezifikation dokumentiert sein. Der `Idempotency-Key` Header wird als optionaler Header-Parameter definiert:
+
+```yaml
+paths:
+  /v1/orders:
+    post:
+      summary: Create an order
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: |
+            Optional UUID for idempotent request handling.
+            If provided, repeated requests with the same key and body
+            return the cached response instead of creating a new resource.
+            Keys are stored for 24 hours.
+          example: "7f7e3c1a-4b8d-4f6e-9a2b-1c3d5e7f9a0b"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+      responses:
+        '201':
+          description: Order created
+          headers:
+            Location:
+              schema:
+                type: string
+              description: URL of the created order
+        '200':
+          description: Existing order returned (idempotent repeat)
+          headers:
+            Idempotency-Key:
+              schema:
+                type: string
+              description: Echo of the provided Idempotency-Key
+        '409':
+          description: Conflict — resource modified since last read (ETag mismatch)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Idempotency-Key reused with different request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+```
+
+-----
+
+## Übersicht — Eigenschaften aller HTTP-Methoden
+
+|Methode |Safe|Idempotent|Typischer Statuscode|Verwendung                    |
+|--------|----|----------|--------------------|------------------------------|
+|`GET`   |✓   |✓         |`200`               |Ressource lesen               |
+|`HEAD`  |✓   |✓         |`200`               |Nur Header lesen              |
+|`PUT`   |✗   |✓         |`200`, `204`        |Ressource vollständig ersetzen|
+|`DELETE`|✗   |✓         |`204`, `404`        |Ressource löschen             |
+|`POST`  |✗   |✗         |`201`, `202`        |Ressource erstellen           |
+|`PATCH` |✗   |✗         |`200`               |Ressource partiell ändern     |
+
+-----
+
+## Caching — Safe-Methoden effizient nutzen (#227, #155, #156, #157, #158)
+
+Caching ist die direkte Folge der Safe-Eigenschaft: Weil GET und HEAD den Serverzustand nicht verändern, darf ihre Response zwischen gespeichert und wiederverwendet werden. Das reduziert Latenz, entlastet den Server und verbessert die Skalierbarkeit — ohne dass der aufrufende Dienst etwas davon mitbekommt.
+
+Nach Regel **#227** muss jeder Endpunkt dessen Responses gecacht werden können, explizit mit `Cache-Control`-Direktiven dokumentiert sein. Das gilt umgekehrt genauso: Endpunkte die nicht gecacht werden dürfen, müssen das ebenfalls explizit signalisieren.
+
+### Cache-Control Direktiven
+
+Der `Cache-Control`-Header steuert das Caching-Verhalten auf allen Ebenen — im aufrufenden Dienst, in Proxies, im API-Gateway (Gravitee) und in CDNs. Die wichtigsten Direktiven:
+
+```http
+Cache-Control: max-age=3600
+```
+
+Die Response darf 3600 Sekunden (1 Stunde) gecacht werden. Innerhalb dieser Zeit wird keine neue Anfrage an den Server gestellt.
+
+```http
+Cache-Control: max-age=3600, must-revalidate
+```
+
+Die Response darf 3600 Sekunden gecacht werden. Nach Ablauf muss der Cache beim Server validieren bevor die Response erneut ausgeliefert wird — auch wenn der Server nicht erreichbar ist.
+
+```http
+Cache-Control: no-cache
+```
+
+Die Response darf gecacht werden, aber muss vor jeder Auslieferung beim Server validiert werden. Das verhindert veraltete Daten ohne Caching komplett zu deaktivieren — sinnvoll in Kombination mit ETag.
+
+```http
+Cache-Control: no-store
+```
+
+Die Response darf nicht gespeichert werden. Für sensible Daten wie Authentifizierungs-Tokens oder persönliche Informationen.
+
+```http
+Cache-Control: private, max-age=300
+```
+
+Die Response ist benutzerspezifisch und darf nur vom aufrufenden Dienst selbst gecacht werden — nicht von gemeinsam genutzten Proxies oder Gateways.
+
+### Welche Direktive für welchen Endpunkt?
+
+Die Wahl richtet sich danach wie häufig sich die Daten ändern und wie kritisch veraltete Daten sind:
+
+|Endpunkt-Typ                                |Direktive                     |Begründung                                        |
+|--------------------------------------------|------------------------------|--------------------------------------------------|
+|Statische Referenzdaten (Länder, Kategorien)|`max-age=86400`               |Ändern sich selten, 24h Cache sinnvoll            |
+|Produktkatalog                              |`max-age=300, must-revalidate`|Ändern sich gelegentlich, 5min Cache akzeptabel   |
+|Bestellstatus                               |`no-cache`                    |Muss aktuell sein, aber ETag-Validierung möglich  |
+|Persönliche Daten                           |`private, max-age=60`         |Nur aufrufender Dienst darf cachen                |
+|Zahlungsdaten                               |`no-store`                    |Darf nicht persistiert werden                     |
+|POST /search                                |`no-store`                    |POST-Responses werden standardmässig nicht gecacht|
+
+### Caching in OpenAPI dokumentieren (#227)
+
+Caching-Verhalten wird in der OpenAPI-Spezifikation über Response-Header dokumentiert:
+
+```yaml
+paths:
+  /v1/product-categories:
+    get:
+      summary: List product categories
+      description: |
+        Returns all product categories. Responses are cached for 24 hours.
+        Use If-None-Match for conditional requests.
+      responses:
+        '200':
+          description: List of categories
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: "max-age=86400, must-revalidate"
+            ETag:
+              schema:
+                type: string
+                example: "\"a1b2c3d4\""
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryList'
+        '304':
+          description: Not Modified — cached response is still valid
+          headers:
+            ETag:
+              schema:
+                type: string
+
+  /v1/orders/{id}:
+    get:
+      summary: Get order by ID
+      responses:
+        '200':
+          description: Order details
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: "no-cache"
+            ETag:
+              schema:
+                type: string
+```
+
+### ETag als Cache-Validierung (#182)
+
+ETag und Caching arbeiten zusammen: `Cache-Control: no-cache` bedeutet nicht “nicht cachen” sondern “vor Auslieferung validieren”. Die Validierung erfolgt über den ETag:
+
+```http
+# Erster Request — Response wird gecacht
+GET /v1/orders/ord_abc123
+
+HTTP/1.1 200 OK
+Cache-Control: no-cache
+ETag: "a1b2c3d4e5f6"
+
+{ "id": "ord_abc123", "status": "OPEN" }
+```
+
+```http
+# Zweiter Request — Cache validiert mit ETag
+GET /v1/orders/ord_abc123
+If-None-Match: "a1b2c3d4e5f6"
+
+HTTP/1.1 304 Not Modified
+ETag: "a1b2c3d4e5f6"
+# Kein Body — gecachte Response wird verwendet
+```
+
+```http
+# Dritter Request — Ressource hat sich geändert
+GET /v1/orders/ord_abc123
+If-None-Match: "a1b2c3d4e5f6"
+
+HTTP/1.1 200 OK
+ETag: "x7y8z9a0b1c2"
+
+{ "id": "ord_abc123", "status": "CANCELLED" }
+# Neue Version wird zurückgegeben und gecacht
+```
+
+Das Ergebnis: Netzwerktraffic wird nur dann erzeugt wenn sich tatsächlich etwas geändert hat. Bei `304` wird kein Response-Body übertragen — nur der Header. Bei grossen Responses ist das ein erheblicher Bandbreitengewinn.
+
+### Bandbreite zusätzlich reduzieren (#156, #157, #158)
+
+Neben Caching gibt es drei weitere Mechanismen die den Datenverkehr reduzieren:
+
+**gzip-Komprimierung (#156)** komprimiert Response-Bodies serverseitig. Der aufrufende Dienst signalisiert Unterstützung über den `Accept-Encoding`-Header:
+
+```http
+GET /v1/orders
+Accept-Encoding: gzip
+
+HTTP/1.1 200 OK
+Content-Encoding: gzip
+Content-Type: application/json
+```
+
+JSON-Daten lassen sich durch gzip typischerweise auf 10–20% der ursprünglichen Grösse komprimieren. Bei Pagination-Responses mit vielen Einträgen ist das ein signifikanter Gewinn.
+
+**Feldauswahl (#157)** erlaubt dem aufrufenden Dienst, nur benötigte Felder anzufordern. Das reduziert sowohl den übertragenen Datenumfang als auch den Serialisierungsaufwand serverseitig:
+
+```http
+GET /v1/orders?fields=id,status,created_at
+
+HTTP/1.1 200 OK
+
+{
+  "items": [
+    { "id": "ord_abc123", "status": "OPEN", "created_at": "2024-01-15T10:30:00Z" },
+    { "id": "ord_def456", "status": "COMPLETED", "created_at": "2024-01-14T08:00:00Z" }
+  ],
+  "cursor": { "next": "eyJpZCI6...", "prev": null }
+}
+```
+
+Ohne `?fields` würden alle Properties zurückgegeben — inkl. `delivery_address`, `line_items`, `payment_details` und weiterer Felder die für den jeweiligen Use Case nicht relevant sind.
+
+**Einbetten von Sub-Ressourcen (#158)** reduziert die Anzahl der Requests indem verwandte Ressourcen in einer einzigen Response mitgeliefert werden:
+
+```http
+GET /v1/orders/ord_abc123?embed=items,customer
+
+HTTP/1.1 200 OK
+
+{
+  "id": "ord_abc123",
+  "status": "OPEN",
+  "items": [
+    { "id": "item_001", "product_id": "prod_xyz", "quantity": 2 }
+  ],
+  "customer": {
+    "id": "cust_789",
+    "name": "Max Muster"
+  }
+}
+```
+
+Ohne `embed` wären drei separate Requests nötig: `GET /v1/orders/ord_abc123`, `GET /v1/orders/ord_abc123/items` und `GET /v1/customers/cust_789`. Das Einbetten ist optional — der aufrufende Dienst entscheidet je nach Bedarf.
+
+### Caching bei POST /search
+
+POST-Requests werden von HTTP-Infrastruktur standardmässig nicht gecacht. Das ist ein Nachteil von `POST /v1/orders/search` gegenüber `GET /v1/orders` mit Query-Parametern. GET-Responses können gecacht werden, POST-Responses nicht.
+
+Wenn Caching für Suchergebnisse relevant ist, empfiehlt sich `GET` mit Query-Parametern für den einfachen Fall — und `POST /search` nur wenn die Komplexität des Filters es wirklich erfordert. Das ist die in Regel #237 beschriebene Entscheidung: einfache Filter per GET, komplexe Filter per POST — mit dem bewussten Verzicht auf Caching beim POST-Endpunkt.
+
+-----
+
+**GET-Endpunkte mit Seiteneffekten implementieren.** Ein GET-Request sendet eine Benachrichtigung, inkrementiert einen Zähler oder ändert einen Datenbankwert. Das verletzt die Safe-Eigenschaft. Proxies cachen die Response, Monitoring-Systeme rufen den Endpunkt regelmässig ab — die Seiteneffekte treten unkontrolliert auf.
+
+**PUT für partielle Updates verwenden.** PUT ersetzt die gesamte Ressource. Wird nur ein Teilbereich im Body übergeben, werden alle nicht übermittelten Felder gelöscht oder auf Default-Werte zurückgesetzt. Für partielle Updates ist PATCH zu verwenden.
+
+**DELETE bei wiederholtem Aufruf mit `500` antworten.** Ein zweiter DELETE-Aufruf auf eine bereits gelöschte Ressource löst serverseitig eine Exception aus die als `500` zurückgegeben wird. Korrekt ist `404` oder `204` — nicht `500`. Idempotenz bedeutet dass der Fehlerfall “Ressource existiert nicht mehr” kein Serverfehler ist.
+
+**POST ohne Idempotenz bei kritischen Operationen.** Eine Zahlung, eine Bestellung oder eine E-Mail-Versendung wird per POST ausgelöst ohne Sekundärschlüssel oder Idempotency-Key. Bei einem Netzwerkfehler und automatischem Retry entstehen Duplikate. Bei allen Operationen mit fachlichen Konsequenzen ist Idempotenz Pflicht.
+
+**ETag-Werte selbst konstruieren.** Der `If-Match`-Wert wird nicht aus der vorherigen GET-Response übernommen, sondern aus dem eigenen Zustand berechnet. ETags sind serverinterne Werte — sie dürfen vom aufrufenden Dienst nicht konstruiert oder interpretiert werden, analog zu Pagination-Cursors.
+
+**Idempotency-Key zwischen verschiedenen Endpunkten wiederverwenden.** Ein `Idempotency-Key` ist endpunktspezifisch. Derselbe Key für `POST /v1/orders` und `POST /v1/payments` zu verwenden führt zu unerwarteten Ergebnissen. Für jeden Request wird ein neuer Key generiert.
+
+**`Cache-Control`-Header nicht setzen.** Ohne `Cache-Control` entscheidet der Cache selbst ob und wie lange gecacht wird — das Verhalten ist undefiniert und unterscheidet sich zwischen Proxies, Gateways und Clients. Jeder cacheable Endpunkt muss explizit mit `Cache-Control` dokumentiert sein (Regel #227).
+
+**POST-Responses mit `Cache-Control` versehen und Caching erwarten.** POST ist nicht safe und wird von HTTP-Infrastruktur standardmässig nicht gecacht — unabhängig vom gesetzten `Cache-Control`-Header. Wer Caching benötigt, verwendet GET.
+
+**`no-cache` mit “nicht cachen” gleichsetzen.** `Cache-Control: no-cache` bedeutet “vor jeder Auslieferung beim Server validieren” — nicht “niemals cachen”. Die Response wird gecacht, aber vor Verwendung mit ETag validiert. Wer wirklich verhindern will dass etwas gespeichert wird, verwendet `no-store`.
+
+**ETag für Caching ignorieren.** ETag und `Cache-Control: no-cache` sind das effizienteste Caching-Muster: die Response wird lokal gecacht, aber nur ausgeliefert wenn der Server per `304 Not Modified` bestätigt dass sie noch aktuell ist. Ohne ETag muss bei `no-cache` der vollständige Response-Body bei jedem Request übertragen werden.
+
+-----
+
+## Zusammenfassung
+
+|Regel|Kernaussage                                                                                                   |
+|-----|--------------------------------------------------------------------------------------------------------------|
+|#148 |HTTP-Methoden semantisch korrekt verwenden — GET liest, PUT ersetzt, PATCH ändert partiell                    |
+|#149 |Safe: GET, HEAD ändern keinen Zustand. Idempotent: GET, PUT, DELETE liefern bei Wiederholung dasselbe Ergebnis|
+|#229 |POST und PATCH SOLLTEN idempotent gestaltet werden — via Sekundärschlüssel oder Idempotency-Key               |
+|#231 |Sekundärschlüssel im Request-Body für idempotentes POST — fachlicher Schlüssel des aufrufenden Dienstes       |
+|#230 |`Idempotency-Key` Header als technische Alternative — UUID, 24 Stunden gültig                                 |
+|#182 |ETag mit If-Match für optimistisches Locking — verhindert Lost-Update bei gleichzeitigen Zugriffen            |
+|#253 |Asynchrone Operationen mit `202 Accepted` + `Location` — Idempotency-Key verhindert doppelte Jobs             |
+|#227 |Cacheable Endpunkte mit `Cache-Control`-Direktiven in OpenAPI dokumentieren — MUSS                            |
+|#155 |Bandbreite reduzieren — Kombination aus Caching, Komprimierung, Feldauswahl und Einbetten                     |
+|#156 |gzip-Komprimierung via `Accept-Encoding` / `Content-Encoding` — typisch 80–90% Reduktion                      |
+|#157 |Feldauswahl via `?fields=id,status` — nur benötigte Felder übertragen                                         |
+|#158 |Sub-Ressourcen einbetten via `?embed=items` — mehrere Requests in einem zusammenfassen                        |
+
+---
 # Versionierung und Deprecation — Leitfaden für Entwickler
 
 > Basierend auf den Regeln C-01, #116, #106, C-10, #107, #108, #109, #110, #111, #112, C-09, C-12, #185, #186, #187, #188, #189, #190, #191 des REST API Styleguides.
