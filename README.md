@@ -2204,3 +2204,398 @@ GET /docs            # Optional: Swagger UI
 
 *Version 2.0 — Basiert auf Zalando, Adidas und Stripe API Guidelines*  
 *Quercheck: [Stripe API](https://docs.stripe.com/api) · [Adidas Guidelines](https://adidas.gitbook.io/api-guidelines)*
+
+
+# Pagination — Leitfaden für Entwickler
+
+> Basierend auf den Regeln #159, #160, #248, #254, #110, #130, #137, #153 und #176 des REST API Styleguides.
+
+-----
+
+## Warum Pagination?
+
+Ein Order-Service mit 2 Millionen Bestellungen wird ohne Pagination zum Problem: Bei einem Aufruf von `GET /v1/orders` würde versucht, alle 2 Millionen Datensätze in einer einzigen Response zurückzugeben. Der Request läuft in ein Timeout, der Server bricht unter der Last zusammen, und der aufrufende Dienst wartet minutenlang auf eine Antwort die nie eintrifft.
+
+Durch Pagination werden grosse Datenmengen in handhabbare Seiten aufgeteilt. Deshalb gilt nach Regel **#159**: **Jeder Endpunkt der eine Liste zurückgibt, MUSS Pagination unterstützen — ohne Ausnahme.** Kein unlimitierter Response ist erlaubt, unabhängig davon wie klein der Datensatz heute noch ist.
+
+-----
+
+## Cursor vs. Offset — warum Cursor bevorzugt wird
+
+Es gibt zwei grundlegende Ansätze für Pagination. Offset-Pagination ist aus SQL bekannt:
+
+```
+GET /v1/orders?offset=40&limit=20   ← Offset-Pagination
+```
+
+Das wirkt intuitiv — “20 Einträge ab Position 40”. Das Problem zeigt sich erst im Betrieb: Während die zweite Seite abgerufen wird, wird von einem anderen User eine neue Bestellung angelegt. Die neue Bestellung verschiebt alle nachfolgenden Einträge um eine Position. Ein Eintrag wird dadurch doppelt zurückgegeben oder übersprungen. Bei hohem Durchsatz tritt dieses Problem ständig auf.
+
+Cursor-Pagination löst dieses Problem. Statt einer absoluten Position wird ein undurchsichtiger Zeiger auf den letzten gesehenen Eintrag verwendet:
+
+```
+GET /v1/orders?cursor=eyJpZCI6ImFiYzEyMyJ9&limit=20   ← Cursor-Pagination
+```
+
+Im Cursor wird intern der Ankerpunkt im Datensatz kodiert — beispielsweise die ID des letzten zurückgegebenen Eintrags. Neue Einträge die während der Navigation hinzukommen, verschieben keine relativen Positionen. Deshalb empfiehlt Regel **#160**: Cursor-basierte Pagination bevorzugen.
+
+|                  |Offset                            |Cursor                  |
+|------------------|----------------------------------|------------------------|
+|Bekannte Position |✓ direkt berechenbar              |✗ nicht möglich         |
+|Stabile Navigation|✗ Duplikate/Lücken möglich        |✓ immer konsistent      |
+|Sprung zu Seite N |✓ trivial                         |✗ nicht unterstützt     |
+|Geeignet für      |Admin-UIs mit Seitennavigation    |Feeds, Listen, APIs     |
+|Performance       |✗ OFFSET wird langsamer je grösser|✓ gleichbleibend schnell|
+
+Für die meisten API-Anwendungsfälle — Feeds, Listen, Exports — ist die stabile Navigation entscheidend. Das direkte Springen zu Seite N wird selten benötigt; in diesen Fällen empfiehlt sich eine Suchfunktion statt Pagination.
+
+-----
+
+## Das Standard-Response-Format (#248)
+
+Nach Regel **#110** ist das Top-Level einer Response immer ein JSON-Objekt — niemals direkt ein Array. Dadurch können Pagination-Metadaten neben den eigentlichen Daten platziert werden, ohne später einen Breaking Change zu riskieren.
+
+Das vorgeschriebene Format nach **#248** lautet:
+
+```json
+{
+  "items": [
+    {
+      "id": "ord_abc123",
+      "status": "OPEN",
+      "total_amount": 149.95,
+      "created_at": "2024-01-15T10:30:00Z"
+    },
+    {
+      "id": "ord_def456",
+      "status": "IN_PROGRESS",
+      "total_amount": 89.00,
+      "created_at": "2024-01-14T08:15:00Z"
+    }
+  ],
+  "cursor": {
+    "next": "eyJpZCI6Im9yZF9kZWY0NTYiLCJjcmVhdGVkX2F0IjoiMjAyNC0wMS0xNCJ9",
+    "prev": null
+  }
+}
+```
+
+Zwei Felder sind immer vorhanden:
+
+**`items`** enthält das Array der aktuellen Seite. Der Name ist bewusst generisch gewählt — er ist für alle Collection-Endpunkte gleich, was die Client-Implementierung vereinfacht. Nach Regel #120 werden Array-Namen immer im Plural geschrieben.
+
+**`cursor`** enthält zwei Zeiger. `next` verweist auf die nächste Seite und ist `null` wenn die letzte Seite erreicht wurde. `prev` verweist auf die vorherige Seite und ist `null` wenn die erste Seite zurückgegeben wurde. Beide Felder sind opaque Strings — der Inhalt darf vom aufrufenden Dienst weder dekodiert noch konstruiert werden.
+
+-----
+
+## Der Cursor im Detail
+
+Der Cursor ist für den aufrufenden Dienst ein schwarzes Brett: Er wird gespeichert und unverändert zurückgesendet — mehr nicht. Was serverseitig darin kodiert ist, bleibt eine Implementierungsentscheidung:
+
+```
+eyJpZCI6Im9yZF9kZWY0NTYiLCJjcmVhdGVkX2F0IjoiMjAyNC0wMS0xNCJ9
+```
+
+Dekodiert (Base64) ergibt das:
+
+```json
+{ "id": "ord_def456", "created_at": "2024-01-14" }
+```
+
+Diese Information wird serverseitig verwendet, um die nächste Seite ab genau diesem Punkt zu laden. Die interne Cursor-Struktur kann jederzeit geändert werden — ohne dass der aufrufende Dienst angepasst werden muss, solange der Cursor unverändert zurückgesendet wird.
+
+Ein Cursor ist zeitlich begrenzt und keine permanente Ressource. Nach typischerweise 24 Stunden ist ein Cursor ungültig. Wird ein abgelaufener Cursor verwendet, antwortet der Server mit `400 Bad Request` und Problem JSON nach Regel **#176**:
+
+```json
+{
+  "type": "https://api.example.com/errors/invalid-cursor",
+  "title": "Invalid or Expired Cursor",
+  "status": 400,
+  "detail": "The provided cursor is invalid or has expired. Please start a new pagination from the beginning."
+}
+```
+
+-----
+
+## Query-Parameter für Pagination (#130, #137)
+
+Nach Regel **#130** werden alle Query-Parameter in snake_case geschrieben. Regel **#137** definiert die Standard-Namen die für Pagination zu verwenden sind:
+
+```
+GET /v1/orders?limit=20&cursor=eyJpZCI6...
+```
+
+`limit` gibt die maximale Anzahl Einträge pro Seite an. `cursor` enthält den Wert aus der vorherigen Response. Beide Parameter sind optional — fehlen sie, wird eine sinnvolle Standardanzahl (typischerweise 20) ab dem Anfang der Liste zurückgegeben.
+
+Filterparameter können mit Cursor und Limit kombiniert werden:
+
+```
+GET /v1/orders?status=OPEN&sort=-created_at&limit=20&cursor=eyJpZCI6...
+```
+
+Der Cursor muss immer konsistent mit den übrigen Parametern verwendet werden. Ein Cursor der mit `?status=OPEN` erzeugt wurde, darf nicht mit `?status=CANCELLED` kombiniert werden. Der Server validiert dies und gibt andernfalls `400 Bad Request` zurück.
+
+-----
+
+## Vollständiges Navigationsbeispiel
+
+Alle offenen Bestellungen sollen durchlaufen werden. Die Navigation läuft wie folgt ab:
+
+**Erster Request — kein Cursor, Anfang der Liste:**
+
+```
+GET /v1/orders?status=OPEN&sort=-created_at&limit=3
+Authorization: Bearer eyJhbG...
+```
+
+```json
+{
+  "items": [
+    { "id": "ord_001", "status": "OPEN", "created_at": "2024-01-15T10:30:00Z" },
+    { "id": "ord_002", "status": "OPEN", "created_at": "2024-01-14T09:00:00Z" },
+    { "id": "ord_003", "status": "OPEN", "created_at": "2024-01-13T14:20:00Z" }
+  ],
+  "cursor": {
+    "next": "eyJpZCI6Im9yZF8wMDMifQ",
+    "prev": null
+  }
+}
+```
+
+`prev` ist `null` — es handelt sich um die erste Seite. `next` enthält einen Wert — es gibt weitere Einträge.
+
+**Zweiter Request — `next`-Cursor aus vorheriger Response:**
+
+```
+GET /v1/orders?status=OPEN&sort=-created_at&limit=3&cursor=eyJpZCI6Im9yZF8wMDMifQ
+```
+
+```json
+{
+  "items": [
+    { "id": "ord_004", "status": "OPEN", "created_at": "2024-01-12T11:00:00Z" },
+    { "id": "ord_005", "status": "OPEN", "created_at": "2024-01-11T08:30:00Z" }
+  ],
+  "cursor": {
+    "next": null,
+    "prev": "eyJpZCI6Im9yZF8wMDQiLCJkaXJlY3Rpb24iOiJwcmV2In0"
+  }
+}
+```
+
+`next` ist `null` — die letzte Seite wurde erreicht, es gibt keine weiteren Einträge. `prev` enthält einen Wert — Rückwärtsnavigation ist möglich.
+
+**Navigation rückwärts — `prev`-Cursor:**
+
+```
+GET /v1/orders?status=OPEN&sort=-created_at&limit=3&cursor=eyJpZCI6Im9yZF8wMDQiLCJkaXJlY3Rpb24iOiJwcmV2In0
+```
+
+Als Antwort wird die erste Seite zurückgegeben.
+
+-----
+
+## Gesamtanzahl — warum sie vermieden wird (#254)
+
+In der Response eine `total_count` mitzuliefern wirkt praktisch:
+
+```json
+// ✗ Vermeiden
+{
+  "items": [...],
+  "total_count": 284710,
+  "cursor": { "next": "...", "prev": null }
+}
+```
+
+Das Problem: `SELECT COUNT(*)` über 2 Millionen Zeilen mit komplexen Filtern ist teuer. Bei jeder Pagination-Anfrage muss eine vollständige Count-Query ausgeführt werden — auch wenn die letzte Seite längst erreicht wurde und keine weiteren Einträge folgen.
+
+Regel **#254** empfiehlt deshalb: Gesamtanzahl vermeiden. `cursor.next = null` signalisiert das Ende der Liste. Das reicht für die grosse Mehrheit der Anwendungsfälle.
+
+Wird eine Gesamtanzahl tatsächlich benötigt — etwa für eine UI die “284.710 Ergebnisse” anzeigen soll — stehen bessere Alternativen zur Verfügung: eine approximierte Anzahl aus Datenbankstatistiken, ein separater Count-Endpunkt der nur bei Bedarf aufgerufen wird, oder ein gecachter Count der periodisch aktualisiert wird.
+
+-----
+
+## OpenAPI-Spezifikation
+
+Pagination muss vollständig in der OpenAPI-Spezifikation dokumentiert sein. Nach Regel #151 muss jeder Endpunkt alle Statuscodes und sein Response-Schema spezifizieren.
+
+```yaml
+paths:
+  /v1/orders:
+    get:
+      summary: List orders
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: |
+            Maximum number of items to return per page.
+            Defaults to 20 if not specified.
+
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Opaque cursor for pagination, obtained from a previous response.
+            Do not construct or decode this value — treat it as an opaque string.
+            Cursors expire after 24 hours.
+
+        - name: sort
+          in: query
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: |
+            Sort order as comma-separated fields.
+            Prefix with + for ascending (default), - for descending.
+            Example: ?sort=-created_at,+status
+
+      responses:
+        '200':
+          description: A page of orders
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+                  cursor:
+                    type: object
+                    required: [next, prev]
+                    properties:
+                      next:
+                        type: string
+                        nullable: true
+                        description: Cursor for the next page. null if this is the last page.
+                        example: "eyJpZCI6Im9yZF9kZWY0NTYifQ"
+                      prev:
+                        type: string
+                        nullable: true
+                        description: Cursor for the previous page. null if this is the first page.
+              example:
+                items:
+                  - id: "ord_abc123"
+                    status: "OPEN"
+                    created_at: "2024-01-15T10:30:00Z"
+                cursor:
+                  next: "eyJpZCI6Im9yZF9hYmMxMjMifQ"
+                  prev: null
+
+        '400':
+          description: Invalid cursor or parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://api.example.com/errors/invalid-cursor"
+                title: "Invalid or Expired Cursor"
+                status: 400
+                detail: "The provided cursor is invalid or has expired."
+```
+
+-----
+
+## Fehlerbehandlung
+
+Drei Fehlerfälle sind bei Pagination relevant, alle nach Regel **#176** als Problem JSON zurückzugeben:
+
+**Ungültiger oder abgelaufener Cursor:**
+
+```json
+{
+  "type": "https://api.example.com/errors/invalid-cursor",
+  "title": "Invalid or Expired Cursor",
+  "status": 400,
+  "detail": "The provided cursor is invalid or has expired. Please restart pagination."
+}
+```
+
+**`limit` ausserhalb des erlaubten Bereichs:**
+
+```json
+{
+  "type": "https://api.example.com/errors/invalid-parameter",
+  "title": "Invalid Parameter",
+  "status": 422,
+  "detail": "Parameter 'limit' must be between 1 and 100. Provided value: 500."
+}
+```
+
+**Cursor nicht kompatibel mit aktuellen Filterparametern:**
+
+```json
+{
+  "type": "https://api.example.com/errors/cursor-filter-mismatch",
+  "title": "Cursor Filter Mismatch",
+  "status": 400,
+  "detail": "The cursor was created with different filter parameters. Please restart pagination with consistent parameters."
+}
+```
+
+-----
+
+## Pagination bei POST /search (#237)
+
+Pagination gilt nicht nur für `GET`-Endpunkte. Auch der `/search`-Endpunkt für komplexe Filter gibt paginierte Ergebnisse zurück — mit demselben `cursor`-Format im Response-Body. Der Cursor wird im Request-Body mitgesendet:
+
+```json
+POST /v1/orders/search
+
+{
+  "filter": {
+    "status": ["OPEN", "IN_PROGRESS"],
+    "total_amount": { "gte": 100.00 }
+  },
+  "sort": ["-created_at"],
+  "limit": 20,
+  "cursor": "eyJpZCI6Im9yZF9kZWY0NTYifQ"
+}
+```
+
+Der Response ist identisch mit dem `GET`-Endpunkt. Dadurch kann nahtlos zwischen `GET` mit Filtern und `POST /search` gewechselt werden, ohne das Pagination-Muster anzupassen.
+
+-----
+
+## Häufige Fehler
+
+**Cursor konstruieren statt kopieren.** Der Cursor wird dekodiert und selbst aufgebaut — `eyJpZCI6Im9yZF8xMjMifQ` → `{"id":"ord_123"}` → `eyJpZCI6Im9yZF8xMjQifQ`. Das funktioniert zufällig, bricht aber sobald das interne Format serverseitig geändert wird. Der Cursor muss immer unverändert aus der letzten Response übernommen werden.
+
+**`total_count` implementieren und cachen.** `total_count` wird hinzugefügt “weil der aufrufende Dienst es vielleicht braucht”. Nach 5 Minuten ist der Cache veraltet. Das ist schlechter als keine Anzahl. `cursor.next === null` als Ende-Signal ist zuverlässiger.
+
+**Pagination vergessen wenn die Liste klein ist.** “Es gibt nur 50 Kategorien, da wird keine Pagination benötigt.” Ein Jahr später sind es 500. Pagination nachzurüsten ist dann ein Breaking Change — der aufrufende Dienst hat bisher immer alle Einträge auf einmal erhalten. Deshalb gilt #159 ohne Ausnahme, auch für kleine Listen.
+
+**Limit ohne Obergrenze.** `?limit=999999` darf serverseitig nicht akzeptiert werden. Eine sinnvolle Obergrenze (typischerweise 100) muss definiert und bei Überschreitung mit `422` quittiert werden.
+
+**`prev`-Cursor weglassen.** Manche Implementierungen verzichten auf Rückwärtsnavigation. Das ist zulässig wenn der Anwendungsfall es nicht erfordert — aber `prev` muss dann explizit `null` sein und darf nicht einfach weggelassen werden. Nach Regel #123 haben fehlendes Feld und `null` dieselbe Semantik — `prev: null` ist für den aufrufenden Dienst dennoch klarer als ein fehlendes Feld.
+
+-----
+
+## Zusammenfassung
+
+|Regel|Kernaussage                                                                      |
+|-----|---------------------------------------------------------------------------------|
+|#159 |Jede Collection MUSS paginiert sein — keine unlimitierten Responses              |
+|#160 |Cursor-Pagination bevorzugen — stabiler als Offset bei gleichzeitigen Änderungen |
+|#248 |Standard-Format: `{ "items": [...], "cursor": { "next": "...", "prev": "..." } }`|
+|#254 |Keine `total_count` — teuer und selten wirklich nötig                            |
+|#110 |Top-Level immer JSON-Objekt — nie direkt ein Array                               |
+|#130 |Query-Parameter in snake_case: `limit`, `cursor`                                 |
+|#137 |Standard-Namen verwenden: `cursor`, `limit`, `sort`, `fields`                    |
+|#176 |Fehler als Problem JSON: ungültiger Cursor → `400`, falsches Limit → `422`       |
