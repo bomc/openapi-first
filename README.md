@@ -2599,3 +2599,514 @@ Der Response ist identisch mit dem `GET`-Endpunkt. Dadurch kann nahtlos zwischen
 |#130 |Query-Parameter in snake_case: `limit`, `cursor`                                 |
 |#137 |Standard-Namen verwenden: `cursor`, `limit`, `sort`, `fields`                    |
 |#176 |Fehler als Problem JSON: ungültiger Cursor → `400`, falsches Limit → `422`       |
+
+
+# Fehlerbehandlung — Leitfaden für Entwickler
+
+> Basierend auf den Regeln #243, #151, #150, #220, #152, #153, #176, #177, C-03, C-04 und C-05 des REST API Styleguides.
+
+-----
+
+## Warum einheitliche Fehlerbehandlung?
+
+Ein API-Konsument ruft `POST /v1/orders` auf und erhält eine Fehlerantwort. Ohne einheitliches Format muss in der Dokumentation nachgeschlagen werden, ob das Fehlerfeld `message`, `error`, `errorMessage` oder `description` heisst. Ob der HTTP-Statuscode `400` oder `422` zurückgegeben wird. Ob eine Trace-ID vorhanden ist und wo sie zu finden ist.
+
+Einheitliche Fehlerbehandlung löst dieses Problem: Jede Fehlerantwort folgt demselben Format, denselben Statuscodes und denselben Konventionen — unabhängig davon welcher Endpunkt betroffen ist und welches Team ihn implementiert hat. Fehler werden dadurch maschinell verarbeitbar, Monitoring einfacher und Debugging schneller.
+
+-----
+
+## Das Problem JSON Format (#176)
+
+Alle Fehlerantworten verwenden **Problem JSON** nach RFC 7807 mit dem Medientyp `application/problem+json`. Das ist kein optionales Format — nach Regel **#176** gilt es für alle Fehlerfälle ohne Ausnahme.
+
+Ein vollständiges Beispiel:
+
+```json
+{
+  "type": "https://api.example.com/errors/validation-error",
+  "title": "Validation Error",
+  "status": 422,
+  "detail": "The field 'quantity' must be greater than 0.",
+  "instance": "/v1/orders/ord_abc123"
+}
+```
+
+Die fünf Felder im Überblick:
+
+**`type`** (Pflicht) ist eine URI die den Fehlertyp eindeutig identifiziert. Sie verweist idealerweise auf eine Dokumentationsseite die den Fehler beschreibt und mögliche Lösungsschritte nennt. Ist keine Dokumentation verfügbar, wird `about:blank` verwendet.
+
+**`title`** (Pflicht) ist eine kurze, menschenlesbare Beschreibung des Fehlertyps. Der Titel ist für alle Instanzen desselben Fehlertyps identisch — er beschreibt die Klasse des Fehlers, nicht den konkreten Fall.
+
+**`status`** (Pflicht) ist der HTTP-Statuscode als Zahl. Er muss mit dem tatsächlichen HTTP-Statuscode der Response übereinstimmen.
+
+**`detail`** (optional) beschreibt den konkreten Fehlerfall. Hier werden spezifische Informationen angegeben — welches Feld fehlerhaft ist, welcher Wert erwartet wird, was konkret schiefgelaufen ist. Im Gegensatz zu `title` darf `detail` für jede Instanz unterschiedlich sein.
+
+**`instance`** (optional) ist eine URI die die betroffene Ressource identifiziert. Typischerweise der Pfad der angeforderten Ressource.
+
+Für 5xx-Fehler kommt ein sechstes Feld hinzu:
+
+**`trace_id`** (bei 5xx empfohlen) enthält die Trace-ID aus dem W3C `traceparent`-Header. Sie ermöglicht die direkte Korrelation zwischen der Fehlerantwort und den Serverlog-Einträgen — unverzichtbar für das Debugging in verteilten Systemen. Siehe C-05 und C-03/C-04.
+
+```json
+{
+  "type": "https://api.example.com/errors/internal-error",
+  "title": "Internal Server Error",
+  "status": 500,
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+}
+```
+
+-----
+
+## HTTP-Statuscodes (#243, #150, #220)
+
+Nach Regel **#243** werden ausschliesslich offizielle HTTP-Statuscodes aus RFCs verwendet. Proprietäre Codes sind nicht zulässig.
+
+Regel **#150** empfiehlt die Verwendung der gebräuchlichsten Statuscodes. Weniger bekannte Codes sind nur einzusetzen wenn sie den Sachverhalt deutlich präziser beschreiben als die gebräuchlichen Alternativen.
+
+### Erfolg-Statuscodes
+
+|Code              |Bedeutung                         |Wann verwenden                         |
+|------------------|----------------------------------|---------------------------------------|
+|`200 OK`          |Erfolgreich                       |`GET`, `PUT`, `PATCH` mit Response-Body|
+|`201 Created`     |Ressource erstellt                |`POST` bei neuer Ressource             |
+|`202 Accepted`    |Angenommen, noch nicht verarbeitet|Asynchrone Verarbeitung                |
+|`204 No Content`  |Erfolgreich, kein Body            |`DELETE`, `PUT` ohne Response-Body     |
+|`207 Multi-Status`|Teilerfolg                        |Batch-Operationen — siehe #152         |
+
+### Fehler-Statuscodes
+
+|Code                       |Bedeutung                    |Wann verwenden                                        |
+|---------------------------|-----------------------------|------------------------------------------------------|
+|`400 Bad Request`          |Syntaktisch ungültige Anfrage|Ungültiges JSON, fehlende Pflichtfelder               |
+|`401 Unauthorized`         |Nicht authentifiziert        |Kein oder ungültiger Token                            |
+|`403 Forbidden`            |Nicht autorisiert            |Gültiger Token, aber fehlende Berechtigung            |
+|`404 Not Found`            |Ressource nicht gefunden     |Unbekannte ID oder Pfad                               |
+|`409 Conflict`             |Konflikt                     |Optimistic Locking, Duplikat                          |
+|`410 Gone`                 |Dauerhaft entfernt           |Ressource wurde gelöscht und existiert nicht mehr     |
+|`422 Unprocessable Entity` |Semantisch ungültige Anfrage |Syntaktisch korrektes JSON, aber inhaltlich fehlerhaft|
+|`429 Too Many Requests`    |Rate Limit überschritten     |Immer mit `Retry-After` Header — siehe #153           |
+|`500 Internal Server Error`|Unerwarteter Serverfehler    |Technische Fehler auf Serverseite                     |
+|`503 Service Unavailable`  |Dienst nicht verfügbar       |Wartung oder Überlast                                 |
+
+### 400 vs. 422 — der wichtigste Unterschied (#220)
+
+Regel **#220** schreibt vor, den spezifischsten Statuscode zu verwenden. Die Unterscheidung zwischen `400` und `422` ist dabei am häufigsten unklar:
+
+**`400 Bad Request`** — die Anfrage ist syntaktisch nicht verarbeitbar:
+
+```
+POST /v1/orders
+Content-Type: application/json
+
+{ "quantity": "zehn", "price": }    ← Ungültiges JSON
+```
+
+```json
+{
+  "type": "https://api.example.com/errors/invalid-json",
+  "title": "Invalid JSON",
+  "status": 400,
+  "detail": "Unexpected token at position 32."
+}
+```
+
+**`422 Unprocessable Entity`** — die Anfrage ist syntaktisch korrekt, aber semantisch fehlerhaft:
+
+```json
+POST /v1/orders
+Content-Type: application/json
+
+{
+  "quantity": -5,
+  "delivery_date": "2020-01-01"
+}
+```
+
+```json
+{
+  "type": "https://api.example.com/errors/validation-error",
+  "title": "Validation Error",
+  "status": 422,
+  "detail": "Field 'quantity' must be greater than 0. Field 'delivery_date' must be in the future.",
+  "instance": "/v1/orders"
+}
+```
+
+Die Faustregel: Kann der JSON-Parser die Anfrage nicht verarbeiten → `400`. Kann der Parser sie verarbeiten, aber die Geschäftslogik lehnt sie ab → `422`.
+
+-----
+
+## Validierungsfehler mit mehreren Feldern
+
+Bei `422`-Fehlern mit mehreren ungültigen Feldern werden alle Fehler in einer einzigen Response zurückgegeben — nicht nacheinander. RFC 7807 erlaubt eigene Erweiterungsfelder im Problem JSON:
+
+```json
+{
+  "type": "https://api.example.com/errors/validation-error",
+  "title": "Validation Error",
+  "status": 422,
+  "detail": "Multiple validation errors occurred.",
+  "instance": "/v1/orders",
+  "errors": [
+    {
+      "field": "quantity",
+      "message": "Must be greater than 0.",
+      "rejected_value": -5
+    },
+    {
+      "field": "delivery_date",
+      "message": "Must be a future date.",
+      "rejected_value": "2020-01-01"
+    }
+  ]
+}
+```
+
+Das `errors`-Array ist ein Erweiterungsfeld das über den RFC-7807-Standard hinausgeht — es ist aber zulässig da RFC 7807 eigene Felder ausdrücklich erlaubt. Es wird im OpenAPI-Schema für den `422`-Statuscode definiert.
+
+-----
+
+## Rate Limiting (#153)
+
+Wird das Rate Limit eines Endpunkts überschritten, wird `429 Too Many Requests` zurückgegeben — immer mit dem `Retry-After`-Header. Der Header gibt in Sekunden an, nach welcher Wartezeit eine erneute Anfrage gestellt werden kann:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 60
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.example.com/errors/rate-limit-exceeded",
+  "title": "Rate Limit Exceeded",
+  "status": 429,
+  "detail": "The rate limit of 1000 requests per minute has been exceeded.",
+  "instance": "/v1/orders"
+}
+```
+
+Der `Retry-After`-Header ist für automatisierte Clients unverzichtbar: Ohne ihn müssten aufrufende Dienste mit fixen Wartezeiten oder exponentiellem Backoff arbeiten, was zu unnötiger Latenz oder erneuten Überschreitungen führt. Mit dem Header kann die Wartezeit präzise eingehalten werden.
+
+-----
+
+## Batch-Fehler (#152)
+
+Bei Batch-Operationen (`POST /v1/orders/batch`) kann ein Teil der Einträge erfolgreich sein, während andere fehlschlagen. In diesem Fall wird **nicht** `400` oder `500` zurückgegeben — stattdessen `207 Multi-Status` mit dem Ergebnis jedes einzelnen Eintrags:
+
+```http
+HTTP/1.1 207 Multi-Status
+Content-Type: application/json
+
+{
+  "items": [
+    {
+      "id": "req_1",
+      "status": 201,
+      "order": {
+        "id": "ord_abc123",
+        "status": "OPEN"
+      }
+    },
+    {
+      "id": "req_2",
+      "status": 422,
+      "problem": {
+        "type": "https://api.example.com/errors/validation-error",
+        "title": "Validation Error",
+        "status": 422,
+        "detail": "Field 'quantity' must be greater than 0."
+      }
+    },
+    {
+      "id": "req_3",
+      "status": 201,
+      "order": {
+        "id": "ord_def456",
+        "status": "OPEN"
+      }
+    }
+  ]
+}
+```
+
+Jeder Eintrag enthält einen eigenen `status`-Code und entweder das Ergebnisobjekt oder ein eingebettetes Problem JSON. Der aufrufende Dienst iteriert über die Einträge und behandelt Fehler auf Eintragsebene — nicht auf Response-Ebene. Ein `207` ist kein Fehler auf HTTP-Ebene; der Request selbst war erfolgreich, auch wenn einzelne Einträge fehlgeschlagen sind.
+
+-----
+
+## Keine internen Details in Fehlerantworten (#177)
+
+Stack Traces, Datenbankfehlermeldungen, interne Pfade und Implementierungsdetails dürfen niemals in Fehlerantworten erscheinen. Das ist nicht nur eine Stilfrage — es ist ein Sicherheitserfordernis.
+
+**Verboten:**
+
+```json
+{
+  "type": "https://api.example.com/errors/internal-error",
+  "title": "Internal Server Error",
+  "status": 500,
+  "detail": "NullPointerException at com.example.OrderService.create(OrderService.java:142)",
+  "stacktrace": "at com.example.OrderService.create(OrderService.java:142)\nat com.example.OrderController...",
+  "sql": "SELECT * FROM orders WHERE id = NULL"
+}
+```
+
+**Korrekt:**
+
+```json
+{
+  "type": "https://api.example.com/errors/internal-error",
+  "title": "Internal Server Error",
+  "status": 500,
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+}
+```
+
+Der vollständige Fehler wird serverseitig geloggt und ist über die `trace_id` auffindbar. Nach aussen wird nur das Minimum zurückgegeben: Fehlertyp, Statuscode und Trace-ID für die Korrelation.
+
+-----
+
+## Trace-ID für Debugging (C-03, C-04, C-05)
+
+Bei 5xx-Fehlern ist die Verbindung zwischen der Fehlerantwort und den Serverlog-Einträgen entscheidend. Diese Verbindung wird über den W3C Trace Context hergestellt.
+
+Jeder eingehende Request trägt einen `traceparent`-Header:
+
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+```
+
+Der Header enthält:
+
+- `4bf92f3577b34da6a3ce929d0e0e4736` — die 32-stellige `trace_id` die den gesamten Request-Kontext über alle Services hinweg identifiziert
+- `00f067aa0ba902b7` — die `span_id` die den aktuellen Service-Aufruf identifiziert
+
+Tritt ein 5xx-Fehler auf, wird die `trace_id` aus dem `traceparent`-Header extrahiert und in die Problem JSON Response eingebettet (Regel C-05). Der aufrufende Dienst kann diese ID direkt im Monitoring-System oder Log-Aggregator nachschlagen:
+
+```
+Schritt 1: Fehler tritt auf → Response enthält trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
+Schritt 2: In Jaeger / Azure Monitor suchen: trace_id = 4bf92f3577b34da6a3ce929d0e0e4736
+Schritt 3: Vollständiger Request-Verlauf über alle Services sichtbar
+```
+
+Ist kein `traceparent`-Header im eingehenden Request vorhanden, generiert das Gateway (Gravitee) einen neuen Trace. Die `trace_id` ist damit immer vorhanden — unabhängig davon ob der aufrufende Dienst Tracing unterstützt.
+
+-----
+
+## Alle Statuscodes in OpenAPI dokumentieren (#151)
+
+Jeder Endpunkt muss alle möglichen Statuscodes in der OpenAPI-Spezifikation dokumentieren — nicht nur den Erfolgsfall. Nach Regel **#151** ist das kein optionaler Schritt.
+
+```yaml
+paths:
+  /v1/orders:
+    post:
+      summary: Create an order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+      responses:
+        '201':
+          description: Order created successfully
+          headers:
+            Location:
+              schema:
+                type: string
+              description: URL of the created order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+
+        '400':
+          description: Syntactically invalid request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://api.example.com/errors/invalid-json"
+                title: "Invalid JSON"
+                status: 400
+                detail: "Unexpected token at position 32."
+
+        '401':
+          description: Missing or invalid authentication token
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://api.example.com/errors/unauthorized"
+                title: "Unauthorized"
+                status: 401
+
+        '403':
+          description: Insufficient permissions — scope write:orders required
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://api.example.com/errors/forbidden"
+                title: "Forbidden"
+                status: 403
+                detail: "The scope 'write:orders' is required for this operation."
+
+        '422':
+          description: Semantically invalid request — validation failed
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemWithErrors'
+              example:
+                type: "https://api.example.com/errors/validation-error"
+                title: "Validation Error"
+                status: 422
+                detail: "Multiple validation errors occurred."
+                errors:
+                  - field: "quantity"
+                    message: "Must be greater than 0."
+                    rejected_value: -5
+
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://api.example.com/errors/rate-limit-exceeded"
+                title: "Rate Limit Exceeded"
+                status: 429
+                detail: "The rate limit of 1000 requests per minute has been exceeded."
+
+        '500':
+          description: Unexpected server error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemWithTraceId'
+              example:
+                type: "https://api.example.com/errors/internal-error"
+                title: "Internal Server Error"
+                status: 500
+                trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
+
+components:
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.example.com/errors/validation-error"
+        title:
+          type: string
+          example: "Validation Error"
+        status:
+          type: integer
+          format: int32
+          example: 422
+        detail:
+          type: string
+          example: "Field 'quantity' must be greater than 0."
+        instance:
+          type: string
+          format: uri
+          example: "/v1/orders/ord_abc123"
+
+    ProblemWithErrors:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+                  rejected_value: {}
+
+    ProblemWithTraceId:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            trace_id:
+              type: string
+              example: "4bf92f3577b34da6a3ce929d0e0e4736"
+```
+
+-----
+
+## Fehler-URI — eigene Fehlertypen definieren
+
+Jeder `type`-Wert im Problem JSON ist eine URI. Diese URIs müssen konsistent und stabil sein — sie sind Teil des öffentlichen API-Vertrags. Ändert sich eine Fehler-URI, ist das ein Breaking Change.
+
+Empfohlenes Schema:
+
+```
+https://api.{organisation}.com/errors/{fehler-slug}
+```
+
+Beispiele:
+
+```
+https://api.example.com/errors/validation-error
+https://api.example.com/errors/rate-limit-exceeded
+https://api.example.com/errors/resource-not-found
+https://api.example.com/errors/optimistic-locking-conflict
+https://api.example.com/errors/invalid-cursor
+https://api.example.com/errors/insufficient-stock
+```
+
+Der `fehler-slug` ist in kebab-case, beschreibt den Fehler fachlich und ist nicht an interne Implementierungsdetails gebunden. `NullPointerException` ist kein gültiger Slug — `internal-error` schon.
+
+-----
+
+## Häufige Fehler
+
+**`500` für Validierungsfehler zurückgeben.** Ein ungültiges Request-Feld löst intern eine Exception aus, die unbehandelt als `500` nach aussen gelangt. Validierungsfehler sind `422` — sie sind erwartete, normale Zustände, keine Serverfehler.
+
+**`400` pauschal für alle Fehler verwenden.** `400` bedeutet syntaktisch ungültige Anfrage. Für semantische Fehler, fehlende Berechtigungen oder nicht gefundene Ressourcen gibt es spezifischere Statuscodes. Regel #220 schreibt vor, den spezifischsten Code zu verwenden.
+
+**Stack Traces in `detail` schreiben.** Der `detail`-Wert ist für menschenlesbare Fehlerbeschreibungen gedacht, nicht für technische Fehlermeldungen. Stack Traces gehören ausschliesslich in Server-Logs.
+
+**`type` als generischen String befüllen.** `"type": "error"` oder `"type": "BAD_REQUEST"` sind keine validen URIs. Jeder Fehlertyp bekommt eine eindeutige, stabile URI nach dem definierten Schema.
+
+**`Retry-After` bei `429` weglassen.** Ohne `Retry-After` weiss der aufrufende Dienst nicht wie lange gewartet werden soll. Er wird entweder sofort erneut anfragen (und erneut `429` erhalten) oder mit willkürlichen Wartezeiten arbeiten.
+
+**Fehler nicht in OpenAPI spezifizieren.** Fehlt der `422`-Response im OpenAPI-Schema, wissen API-Konsumenten nicht welche Fehler zu erwarten sind. Jeder mögliche Statuscode muss nach Regel #151 dokumentiert sein — auch Fehlerstatuscodes.
+
+**Verschiedene Fehlerformate in derselben API mischen.** Manche Endpunkte geben Problem JSON zurück, andere eigene Formate. Das zwingt aufrufende Dienste dazu, verschiedene Fehlerformate zu unterscheiden. Nach Regel #176 wird Problem JSON überall ohne Ausnahme verwendet.
+
+-----
+
+## Zusammenfassung
+
+|Regel    |Kernaussage                                                                    |
+|---------|-------------------------------------------------------------------------------|
+|#176     |Problem JSON (`application/problem+json`) für alle Fehler — RFC 7807           |
+|#177     |Keine Stack Traces, Datenbankfehler oder interne Pfade in Responses            |
+|#243     |Nur offizielle HTTP-Statuscodes aus RFCs                                       |
+|#220     |Spezifischsten Statuscode verwenden — `422` statt `400` bei Validierungsfehlern|
+|#150     |Gebräuchliche Statuscodes bevorzugen                                           |
+|#151     |Alle Statuscodes in OpenAPI dokumentieren — auch Fehlerstatuscodes             |
+|#152     |`207 Multi-Status` für Batch-Operationen — mit eingebettetem Problem JSON      |
+|#153     |`429` immer mit `Retry-After` Header                                           |
+|C-03/C-04|W3C `traceparent` Header propagieren                                           |
+|C-05     |`trace_id` in alle 5xx Problem JSON Responses                                  |
