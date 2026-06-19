@@ -23,6 +23,108 @@ Validates the definition.
 bomc:
   $example: ./for.code
 ```
+---
+
+# REST API Guidelines
+
+Diese Seite ist der Einstiegspunkt für alle API-bezogenen Standards, Richtlinien und Entwicklerleitfäden. Sie richtet sich an alle Teams die APIs entwerfen, implementieren oder konsumieren.
+
+-----
+
+## Wozu diese Guidelines?
+
+APIs sind Verträge zwischen Teams. Ein einheitlicher Standard stellt sicher, dass APIs vorhersehbar, konsistent und wartbar sind — unabhängig davon welches Team sie entwickelt hat. Ohne gemeinsame Regeln entstehen APIs die jede für sich sinnvoll erscheint, aber im Zusammenspiel inkonsistent ist: unterschiedliche Namenskonventionen, verschiedene Fehlerformate, uneinheitliche Versionierungsstrategien.
+
+Diese Guidelines basieren auf den [Zalando RESTful API Guidelines](https://opensource.zalando.com/restful-api-guidelines/), ergänzt durch Erkenntnisse aus den [Adidas API Guidelines](https://adidas.gitbook.io/api-guidelines/) und der [Stripe API](https://docs.stripe.com/api). Zalando-interne Regeln wurden entfernt, eigene Anpassungen sind explizit dokumentiert.
+
+-----
+
+## Wie sind die Guidelines aufgebaut?
+
+Die Guidelines bestehen aus zwei Ebenen:
+
+**Der Styleguide** ist das normative Regelwerk. Er definiert alle Regeln mit ihrer Verbindlichkeit (MUSS / SOLLTE / KANN), einer Erklärung und Beispielen. Er ist die verbindliche Referenz — bei Fragen oder Unklarheiten gilt der Styleguide.
+
+**Die Entwicklerleitfäden** sind thematische Anleitungen für häufige Aufgaben. Sie erklären wie die Regeln in der Praxis umgesetzt werden — mit vollständigen Beispielen, Entscheidungsbäumen und typischen Fehlern. Sie setzen den Styleguide voraus und vertiefen einzelne Themen.
+
+-----
+
+## Einstieg nach Rolle
+
+**Ich entwerfe eine neue API**
+→ Beginne mit dem [Styleguide](./api-styleguide-v2.md), Kapitel 1–5 (Allgemein, Meta, Sicherheit, URLs)
+→ Dann [Datenformate und Typen](./guides/data-formats-guide.md)
+→ Dann [OpenAPI-Beispiel](./openapi-example.yaml) als Vorlage
+
+**Ich implementiere einen bestehenden API-Entwurf**
+→ [Fehlerbehandlung](./guides/error-handling-guide.md)
+→ [Idempotenz, Sicherheit und Caching](./guides/idempotency-guide.md)
+→ [Pagination](./guides/pagination-guide.md)
+
+**Ich ändere eine bestehende API**
+→ [Versionierung und Deprecation](./guides/versioning-guide.md)
+→ Prüfen ob eine Breaking Change vorliegt: Styleguide [#106 / C-10](./api-styleguide-v2.md#12-kompatibilität-und-erweiterbarkeit)
+
+**Ich konsumiere eine API**
+→ [Idempotenz](./guides/idempotency-guide.md) — Tolerant Reader Pattern, Retry-Verhalten
+→ [Fehlerbehandlung](./guides/error-handling-guide.md) — Problem JSON, Statuscodes
+
+-----
+
+## Übersicht aller Dokumente
+
+### Normatives Regelwerk
+
+|Dokument                                     |Inhalt                                                         |
+|---------------------------------------------|---------------------------------------------------------------|
+|[REST API Styleguide](./api-styleguide-v2.md)|Alle Regeln mit Erklärungen auf Deutsch — verbindliche Referenz|
+|[OpenAPI Beispiel](./openapi-example.yaml)   |Vollständige OpenAPI 3.1 Spezifikation als Vorlage             |
+
+### Entwicklerleitfäden
+
+|Leitfaden                                                          |Thema                                                |Zugehörige Regeln                       |
+|-------------------------------------------------------------------|-----------------------------------------------------|----------------------------------------|
+|[Datenformate und Typen](./guides/data-formats-guide.md)           |snake_case, Datum/Zeit, Zahlen, Enums, null          |#118, #169, #171, #174, #235, #238, #240|
+|[Fehlerbehandlung](./guides/error-handling-guide.md)               |Problem JSON, HTTP-Statuscodes, Trace-ID             |#176, #177, #153, #220, #152, C-05      |
+|[Pagination](./guides/pagination-guide.md)                         |Cursor-Pagination, Response-Format, Navigation       |#159, #160, #248, #254                  |
+|[Versionierung und Deprecation](./guides/versioning-guide.md)      |URL-Versioning, Breaking Changes, Deprecation-Prozess|C-01, #106, C-10, #185–#191             |
+|[Idempotenz, Sicherheit und Caching](./guides/idempotency-guide.md)|Safe/Idempotent, ETag, Idempotency-Key, Cache-Control|#148, #149, #229–#231, #182, #227       |
+
+-----
+
+## Verbindlichkeit
+
+Die Regeln im Styleguide verwenden drei Verbindlichkeitsstufen:
+
+|Begriff   |Bedeutung                                                        |
+|----------|-----------------------------------------------------------------|
+|**MUSS**  |Verpflichtend — keine Ausnahmen ohne explizite Genehmigung       |
+|**SOLLTE**|Empfohlen — Abweichungen müssen begründet und dokumentiert werden|
+|**KANN**  |Optional — nach eigenem Ermessen des Teams                       |
+
+Bewusste Abweichungen vom Styleguide werden im API-Design-Review dokumentiert und müssen vom zuständigen Architekten freigegeben werden.
+
+-----
+
+## Abweichungen von den Zalando Guidelines
+
+Folgende Regeln weichen bewusst vom Zalando-Standard ab oder wurden ersetzt:
+
+|Zalando-Regel                    |Unser Standard                                                  |
+|---------------------------------|----------------------------------------------------------------|
+|#114/#115 — Media Type Versioning|**C-01** — URL-Versionierung: `/v{n}/resource`                  |
+|#163/#164/#165 — HATEOAS         |**C-02** — Kein HATEOAS: kein `_links`, `href`, `self`          |
+|#233 — X-Flow-ID                 |**C-03/C-04** — W3C `traceparent` + `tracestate` (OpenTelemetry)|
+
+Zalando-interne Regeln (#223, #224, #183, #173, #249, #234) wurden vollständig entfernt. Die Begründungen sind im Styleguide unter “Entfernte Zalando-interne Regeln” dokumentiert.
+
+-----
+
+## Fragen und Feedback
+
+Unklarheiten, Lücken oder Verbesserungsvorschläge werden als Kommentar auf dieser Seite oder direkt als Pull Request im [API Guidelines Repository](#) eingebracht.
+
+Für Fragen zu konkreten API-Designs steht das Platform Team zur Verfügung: **[platform-team@company.com](mailto:platform-team@company.com)**
 
 ---
 
