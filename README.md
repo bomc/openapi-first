@@ -23,7 +23,489 @@ Validates the definition.
 bomc:
   $example: ./for.code
 ```
+---
 
+# Versionierung und Deprecation — Leitfaden für Entwickler
+
+> Basierend auf den Regeln C-01, #116, #106, C-10, #107, #108, #109, #110, #111, #112, C-09, C-12, #185, #186, #187, #188, #189, #190, #191 des REST API Styleguides.
+
+-----
+
+## Zwei Ebenen der Versionierung
+
+API-Versionierung findet auf zwei Ebenen statt, die unabhängig voneinander verwaltet werden und unterschiedliche Zwecke erfüllen:
+
+**URL-Version** — die Major-Version im Pfad (`/v1/`, `/v2/`). Sie wird nur bei inkompatiblen Breaking Changes erhöht und bleibt über lange Zeiträume stabil. Eine neue URL-Version ist eine weitreichende Entscheidung mit Folgen für alle Konsumenten.
+
+**Spec-Version** — die Versionsnummer in der OpenAPI-Spezifikation (`1.3.2`). Sie folgt Semantic Versioning und wird bei jeder Änderung der API-Beschreibung aktualisiert — auch bei kleinen Korrekturen oder neuen optionalen Feldern.
+
+Diese Trennung ist bewusst: Die Spec-Version dokumentiert den Entwicklungsstand der API-Beschreibung. Die URL-Version signalisiert Konsumenten ob eine Migration erforderlich ist.
+
+-----
+
+## URL-Versionierung (C-01)
+
+Nach Regel **C-01** enthält jeder API-Pfad die Major-Version als erstes Pfadsegment:
+
+```
+/v1/orders
+/v1/order-items/{id}
+/v1/customers/{id}/addresses
+```
+
+Dabei gelten drei feste Regeln: Nur Major Versions werden im Pfad geführt (`v1`, `v2`, `v3`). Media Type Versioning (`Accept: application/vnd.api+json;version=2`) wird nicht verwendet. Header-Versionierung wird nicht verwendet.
+
+Eine neue Major Version wird ausschliesslich bei echten Breaking Changes eingeführt — nicht bei jeder grösseren Erweiterung. Solange Konsumenten keine Anpassungen an ihrem Code vornehmen müssen, bleibt die URL-Version unverändert.
+
+-----
+
+## Semantic Versioning der Spec (#116)
+
+Die Versionsnummer in der OpenAPI-Spezifikation folgt dem Schema `MAJOR.MINOR.PATCH`:
+
+|Änderung                           |Aktion       |Beispiel         |
+|-----------------------------------|-------------|-----------------|
+|Breaking Change — inkompatibel     |MAJOR erhöhen|`1.3.2` → `2.0.0`|
+|Neue Funktion — rückwärtskompatibel|MINOR erhöhen|`1.3.2` → `1.4.0`|
+|Korrektur oder Dokumentation       |PATCH erhöhen|`1.3.2` → `1.3.3`|
+
+```yaml
+info:
+  title: Order Management API
+  version: 1.4.2    # Spec-Version — unabhängig von der URL-Version
+  x-api-id: d0184f38-b98d-11e7-9c56-68f728c1ba70
+```
+
+Die `x-api-id` ist eine unveränderliche UUID die die API über alle Versionen hinweg eindeutig identifiziert. Sie ändert sich auch bei Breaking Changes oder Umbenennung der API nicht.
+
+-----
+
+## Was ist ein Breaking Change? (#106, C-10)
+
+Breaking Changes erfordern eine neue Major Version in URL und Spec. Die vier Erweiterungsregeln nach **C-10** definieren was als Breaking Change gilt:
+
+**1. Nichts wegnehmen** — keine Properties, Endpunkte oder Enum-Werte dürfen entfernt werden.
+
+**2. Processing Rules nicht ändern** — die Semantik bestehender Felder bleibt stabil. Ein Feld das bisher den Nettobetrag enthielt darf nicht plötzlich den Bruttobetrag enthalten, auch wenn der Feldname gleich bleibt.
+
+**3. Optionales nicht zu Pflicht machen** — ein bisher optionales Feld darf nicht zu einem Pflichtfeld werden. Konsumenten die das Feld bisher weggelassen haben, würden sonst mit `422`-Fehlern konfrontiert.
+
+**4. Alles Neue muss optional sein** — neue Felder, neue Endpunkte und neue Enum-Werte sind immer optional. Konsumenten die sie nicht kennen, müssen sie ignorieren können.
+
+Die vollständige Übersicht:
+
+|Änderung                                             |Breaking?                                          |
+|-----------------------------------------------------|---------------------------------------------------|
+|Pflichtfeld in Request hinzufügen                    |✓ Breaking                                         |
+|Feld entfernen oder umbenennen                       |✓ Breaking                                         |
+|Ressource umbenennen (`/orders` → `/purchase-orders`)|✓ Breaking                                         |
+|Typ ändern (`string` → `integer`)                    |✓ Breaking                                         |
+|Semantik eines Feldes ändern ohne Umbenennung        |✓ Breaking                                         |
+|Endpunkt entfernen                                   |✓ Breaking                                         |
+|Statuscode ändern                                    |✓ Breaking                                         |
+|Optionales Feld zum Request hinzufügen               |✗ Kompatibel                                       |
+|Optionales Feld zur Response hinzufügen              |✗ Kompatibel                                       |
+|Neuen Endpunkt hinzufügen                            |✗ Kompatibel                                       |
+|Enum-Wert hinzufügen                                 |✗ Kompatibel (wenn Konsument tolerant — siehe #108)|
+|Fehlermeldung in `detail` anpassen                   |✗ Kompatibel                                       |
+
+-----
+
+## Rückwärtskompatible Erweiterungen (#107, #111)
+
+Das Ziel ist es, neue Funktionalität einzuführen ohne bestehende Konsumenten zu beeinträchtigen. Dazu gibt es bewährte Muster:
+
+**Optionale Felder hinzufügen:**
+
+```json
+// Vorher — v1 Response
+{
+  "id": "ord_abc123",
+  "status": "OPEN",
+  "total_amount": 149.95
+}
+
+// Nachher — v1 Response, rückwärtskompatibel erweitert
+{
+  "id": "ord_abc123",
+  "status": "OPEN",
+  "total_amount": 149.95,
+  "tax_amount": 23.99,          // neu, optional
+  "currency_code": "EUR"         // neu, optional
+}
+```
+
+Konsumenten die das neue Feld nicht kennen, ignorieren es. Konsumenten die es nutzen wollen, können es ab sofort verwenden — ohne eine neue Major Version.
+
+**Neue Endpunkte hinzufügen:**
+
+```
+// Bestehend — unverändert
+GET /v1/orders
+GET /v1/orders/{id}
+
+// Neu hinzugefügt — kein Breaking Change
+GET /v1/orders/{id}/timeline
+POST /v1/orders/export
+```
+
+**Enum-Werte erweitern:**
+
+Nach Regel **#112** werden Enum-Listen als offen deklariert — neue Werte können jederzeit hinzugefügt werden. Konsumenten müssen unbekannte Werte tolerieren statt mit Fehler ablehnen:
+
+```yaml
+status:
+  type: string
+  x-extensible-enum:
+    - OPEN
+    - IN_PROGRESS
+    - COMPLETED
+    - CANCELLED
+  description: |
+    New values may be added in future versions.
+    Clients must handle unknown values gracefully.
+```
+
+-----
+
+## Tolerant Reader Pattern (#108, C-09)
+
+Rückwärtskompatible Erweiterungen funktionieren nur wenn Konsumenten auf der Gegenseite robust implementiert sind. Nach Regel **#108** und Postel’s Law (C-09) gilt:
+
+**Unbekannte Properties ignorieren:**
+
+```javascript
+// ✗ Fehleranfällig — bricht bei neuen Feldern
+const { id, status, total_amount } = response;
+if (Object.keys(response).some(k => !['id','status','total_amount'].includes(k))) {
+  throw new Error('Unexpected field in response');
+}
+
+// ✓ Robust — unbekannte Felder werden ignoriert
+const { id, status, total_amount } = response;
+// Weitere Felder werden einfach nicht ausgelesen
+```
+
+**Unbekannte Enum-Werte tolerieren:**
+
+```javascript
+// ✗ Fehleranfällig — bricht bei neuen Enum-Werten
+switch (order.status) {
+  case 'OPEN': ...; break;
+  case 'COMPLETED': ...; break;
+  default: throw new Error(`Unknown status: ${order.status}`);
+}
+
+// ✓ Robust — unbekannte Werte werden toleriert
+switch (order.status) {
+  case 'OPEN': ...; break;
+  case 'COMPLETED': ...; break;
+  default:
+    // Unbekannten Status ignorieren oder als "sonstiger Zustand" behandeln
+    break;
+}
+```
+
+**Nicht verwendete Response-Felder nicht validieren:**
+
+Ein Konsument der nur `id` und `status` benötigt, sollte nicht prüfen ob die Response ausschliesslich diese Felder enthält. Zusätzliche Felder sind normale Erweiterungen, keine Fehler.
+
+-----
+
+## API-Spec in Git verwalten (C-12)
+
+Nach Regel **C-12** werden OpenAPI-Spezifikationen in Git verwaltet — mit denselben Konventionen wie Code:
+
+```
+repository/
+├── openapi.yaml          # Aktuelle Spec
+├── CHANGELOG.md          # Alle Änderungen dokumentiert
+└── ...
+```
+
+Für jede veröffentlichte API-Version wird ein Git Tag gesetzt:
+
+```bash
+git tag api/v1.4.2
+git push origin api/v1.4.2
+```
+
+Alle Änderungen an der Spec laufen über Pull Requests — kein direktes Commit auf `main`. Das ermöglicht Code-Reviews für API-Änderungen und stellt sicher, dass Breaking Changes bewusst entschieden werden.
+
+**CHANGELOG.md** dokumentiert jede Änderung mit Versionsreferenz:
+
+```markdown
+# Changelog
+
+## [1.4.2] — 2024-06-15
+### Fixed
+- Corrected description of `delivery_date` field (#169)
+
+## [1.4.0] — 2024-05-01
+### Added
+- Optional field `tax_amount` in Order response
+- Optional field `currency_code` in Order response
+- New endpoint GET /v1/orders/{id}/timeline
+
+## [2.0.0] — 2024-03-01
+### Breaking Changes
+- Renamed field `price` to `total_amount` in Order response
+- Removed deprecated endpoint GET /v1/legacy-orders
+- Changed type of `quantity` from string to integer
+
+### Migration
+- Replace all references to `price` with `total_amount`
+- Migrate from /v1/legacy-orders to /v2/orders
+```
+
+-----
+
+## Wann eine neue Major Version nötig ist
+
+Eine neue URL-Version (`/v2/`) ist nur bei echten Breaking Changes einzuführen. Drei Szenarien verdeutlichen die Entscheidung:
+
+**Szenario 1 — Feldumbenennung:** Das Feld `price` soll in `total_amount` umbenannt werden. Das ist ein Breaking Change — alle Konsumenten die `price` lesen, erhalten `null` oder einen Fehler. Eine neue Major Version ist erforderlich.
+
+**Szenario 2 — Neues Pflichtfeld:** Ein neues Pflichtfeld `warehouse_id` soll zum POST-Request hinzugefügt werden. Das ist ein Breaking Change — alle Konsumenten die das Feld nicht mitschicken, erhalten `422`. Eine neue Major Version ist erforderlich.
+
+**Szenario 3 — Neues optionales Feld:** Ein neues optionales Feld `estimated_delivery_at` soll zur Response hinzugefügt werden. Das ist kein Breaking Change — Konsumenten ignorieren das Feld einfach. Keine neue Major Version nötig, nur MINOR in der Spec erhöhen.
+
+-----
+
+## Übergang auf eine neue Major Version
+
+Wenn eine neue Major Version eingeführt wird, laufen beide Versionen für eine Übergangszeit parallel:
+
+```
+/v1/orders    ← Deprecated — läuft noch bis Sunset-Datum
+/v2/orders    ← Aktuelle Version
+```
+
+Diese Parallelphase ist keine technische Empfehlung sondern eine Pflicht gegenüber Konsumenten: Sie brauchen Zeit um zu migrieren. Der Deprecation-Prozess (siehe nächstes Kapitel) regelt wie lange die alte Version verfügbar bleibt und wie Konsumenten informiert werden.
+
+-----
+
+## Deprecation-Prozess (#185, #186, #187, #188, #189, #190, #191)
+
+Deprecation ist kein einmaliger Akt sondern ein strukturierter Prozess mit sechs Schritten. Kein Konsument darf unvorbereitet von einer API-Abschaltung betroffen sein.
+
+### Schritt 0 — Spec markieren (#187)
+
+Als erstes wird der betroffene Endpunkt in der OpenAPI-Spezifikation als deprecated markiert:
+
+```yaml
+paths:
+  /v1/orders:
+    get:
+      deprecated: true
+      description: |
+        **Deprecated** — Migrate to /v2/orders.
+        This endpoint will be decommissioned on 2025-06-30.
+        See migration guide: https://developer.example.com/migration/v2
+```
+
+Das Sunset-Datum wird in der Beschreibung genannt. Es wird gleichzeitig im CHANGELOG.md dokumentiert.
+
+### Schritt 1 — Response-Header setzen (#189)
+
+Ab sofort enthalten alle Responses des deprecated Endpunkts zwei HTTP-Header:
+
+```http
+Deprecation: true
+Sunset: Mon, 30 Jun 2025 23:59:59 GMT
+Link: <https://api.example.com/v2/orders>; rel="successor-version"
+```
+
+`Deprecation: true` signalisiert maschinell dass dieser Endpunkt abgekündigt ist. `Sunset` gibt das genaue Abschaltdatum im RFC 7231 Format an. `Link` verweist auf den Nachfolge-Endpunkt. Automatisierte Monitoring-Systeme der Konsumenten können diese Header auswerten und Warnungen ausgeben.
+
+### Schritt 2 — Ankündigung
+
+Alle bekannten Konsumenten werden aktiv informiert — nicht nur über die Header, sondern direkt:
+
+- Interne Konsumenten: E-Mail, Ticket im Issue-Tracker, persönliche Benachrichtigung
+- Externe Partner: E-Mail an den definierten technischen Ansprechpartner
+- Öffentliche APIs: Blogpost, Developer Portal, Newsletter, Changelog
+
+Die Ankündigung enthält das Sunset-Datum, den Migrationspfad und einen Link zur Migrationsdokumentation. Datum, Kanal und Empfänger der Ankündigung werden dokumentiert.
+
+### Schritt 3 — Migrationsfrist einräumen
+
+Die Mindestfrist richtet sich nach der deklarierten `x-audience` der API:
+
+|Audience                |Mindestfrist|
+|------------------------|------------|
+|`component-internal`    |2 Wochen    |
+|`business-unit-internal`|4 Wochen    |
+|`company-internal`      |3 Monate    |
+|`external-partner`      |6 Monate    |
+|`external-public`       |12 Monate   |
+
+Diese Fristen sind nicht verhandelbar. Sie spiegeln die unterschiedlichen Rahmenbedingungen der Konsumenten wider: interne Teams können schnell reagieren, externe Partner haben eigene Release-Zyklen und Verträge.
+
+### Schritt 4 — Nutzung überwachen (#188, #190)
+
+Während der Migrationsfrist wird die tatsächliche Nutzung des deprecated Endpunkts gemessen. Drei Alert-Schwellen werden konfiguriert:
+
+```
+90 Tage vor Sunset  → Info-Alert: Noch X aktive Konsumenten
+30 Tage vor Sunset  → Warning-Alert: Migration noch nicht abgeschlossen
+ 7 Tage vor Sunset  → Critical-Alert: Abschaltung unmittelbar bevorstehend
+```
+
+Solange aktive Aufrufe vorhanden sind, ist bekannt wer noch nicht migriert hat.
+
+### Schritt 5 — Eskalation
+
+Nach 80% der Migrationsfrist werden Konsumenten die noch nicht migriert haben, aktiv angesprochen:
+
+```
+Frist zu 0%  → Ankündigung an alle bekannten Konsumenten
+Frist zu 50% → Erinnerung an nicht-migrierte Konsumenten
+Frist zu 80% → Eskalation an Team-Lead / Management
+Frist zu 100%→ Abschaltung
+```
+
+Eskalation bedeutet keine Verlängerung der Frist. Sie gibt Konsumenten eine letzte Gelegenheit, die Migration zu priorisieren.
+
+### Schritt 6 — Abschaltung
+
+Nach Ablauf der Migrationsfrist wird der Endpunkt abgeschaltet — auch wenn einzelne Konsumenten noch nicht migriert haben. Voraussetzung ist dass die Nachweise vorliegen:
+
+```
+✓ Ankündigung dokumentiert (Datum, Kanal, Empfänger)
+✓ Sunset-Datum in Spec (#187) und Response-Header (#189) gesetzt
+✓ Monitoring zeigt: Nutzung geht gegen null (#188)
+✓ Eskalation für aktive Konsumenten dokumentiert
+```
+
+Kein Konsument kann die Abschaltung dauerhaft blockieren — das wäre operativ nicht tragbar. Die Verantwortung liegt bei Konsumenten die trotz Ankündigung und Migrationsfrist nicht reagiert haben.
+
+### Deprecated Endpunkte nicht neu verwenden (#191)
+
+Sobald ein Endpunkt als deprecated markiert ist, darf er von neuen Services oder neuen Integrationen nicht mehr verwendet werden. Wer heute eine neue Integration auf einen deprecated Endpunkt aufbaut, muss morgen sofort wieder migrieren.
+
+-----
+
+## Vollständiges Beispiel: Migration von v1 auf v2
+
+Das folgende Beispiel zeigt den vollständigen Lebenszyklus einer Breaking Change — vom Entscheid über die Deprecation bis zur Abschaltung.
+
+**Ausgangslage:** `GET /v1/orders` gibt Bestellungen zurück. Das Feld `price` soll in `total_amount` umbenannt werden — ein Breaking Change.
+
+**Schritt 1 — v2 einführen, v1 weiter betreiben:**
+
+```yaml
+# v2 Spec — neues Feldschema
+/v2/orders:
+  get:
+    responses:
+      '200':
+        content:
+          application/json:
+            schema:
+              properties:
+                id:
+                  type: string
+                total_amount:    # Neu — war vorher "price"
+                  type: number
+                  format: decimal
+```
+
+**Schritt 2 — v1 deprecaten:**
+
+```yaml
+# v1 Spec — deprecated
+/v1/orders:
+  get:
+    deprecated: true
+    description: |
+      Deprecated — Migrate to /v2/orders.
+      The field 'price' has been renamed to 'total_amount' in v2.
+      Sunset date: 2026-03-31.
+```
+
+**Schritt 3 — v1 Response-Header setzen:**
+
+```http
+HTTP/1.1 200 OK
+Deprecation: true
+Sunset: Tue, 31 Mar 2026 23:59:59 GMT
+Link: <https://api.example.com/v2/orders>; rel="successor-version"
+Content-Type: application/json
+
+{
+  "items": [...],
+  "cursor": { "next": "...", "prev": null }
+}
+```
+
+**Schritt 4 — CHANGELOG.md aktualisieren:**
+
+```markdown
+## [2.0.0] — 2025-10-01
+### Breaking Changes
+- Renamed field `price` to `total_amount` in Order response
+
+### Deprecated
+- GET /v1/orders — sunset date: 2026-03-31
+- Migrate to GET /v2/orders
+```
+
+**Schritt 5 — Ankündigung und Monitoring bis Sunset-Datum.**
+
+**Schritt 6 — Am 31. März 2026 — v1 abschalten:**
+
+```http
+HTTP/1.1 410 Gone
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.example.com/errors/api-version-sunset",
+  "title": "API Version Sunset",
+  "status": 410,
+  "detail": "This API version was sunset on 2026-03-31. Please migrate to /v2/orders.",
+  "instance": "/v1/orders"
+}
+```
+
+Nach der Abschaltung gibt der Endpunkt `410 Gone` zurück — nicht `404`. `410` signalisiert explizit dass die Ressource dauerhaft entfernt wurde und nicht wiederkommt. Konsumenten die `404` und `410` unterscheiden, erkennen sofort dass eine Migration erforderlich ist.
+
+-----
+
+## Häufige Fehler
+
+**Breaking Change ohne neue Major Version einführen.** Ein Pflichtfeld wird in der bestehenden Version hinzugefügt. Bestehende Konsumenten scheitern ohne Vorwarnung mit `422`. Die Lösung ist immer eine neue Major Version mit Deprecation der alten.
+
+**Sunset-Datum zu knapp ansetzen.** Zwei Wochen Migrationsfrist für einen externen Partner ist nicht realistisch. Die Mindestfristen aus #185 gelten nicht nur als Empfehlung sondern als Untergrenze.
+
+**Monitoring erst nach der Ankündigung aktivieren.** Ohne Baseline-Monitoring vor der Deprecation ist nicht bekannt wie viele Konsumenten den Endpunkt tatsächlich nutzen. Monitoring sollte immer laufen — nicht erst ab Deprecation.
+
+**Beide Versionen für immer parallel betreiben.** `/v1/` und `/v2/` laufen nach Jahren noch parallel weil der Abschaltungsprozess nie gestartet wurde. Der Deprecation-Prozess beginnt mit der Einführung von v2 — nicht irgendwann danach.
+
+**Enum-Werte ohne Vorwarnung entfernen.** Ein Enum-Wert der in Responses vorkam wird entfernt. Konsumenten die ihren Code auf alle bekannten Werte ausgelegt haben, verhalten sich jetzt unerwartet. Enum-Werte in Responses werden nie entfernt — sie werden deprecated und bleiben bis zur nächsten Major Version erhalten.
+
+**`x-api-id` bei neuer Version ändern.** Die `x-api-id` ist unveränderlich. Eine neue Major Version bekommt dieselbe `x-api-id` wie alle vorherigen Versionen. Nur so ist die Continuity der API über Versionsgrenzen hinweg nachverfolgbar.
+
+-----
+
+## Zusammenfassung
+
+|Regel|Kernaussage                                                                                               |
+|-----|----------------------------------------------------------------------------------------------------------|
+|C-01 |Major-Version im URL-Pfad: `/v1/`, `/v2/` — nur bei Breaking Changes erhöhen                              |
+|#116 |Spec-Version nach Semantic Versioning: MAJOR.MINOR.PATCH                                                  |
+|#106 |Keine Breaking Changes ohne neue Major Version                                                            |
+|C-10 |Vier Erweiterungsregeln: nichts wegnehmen, Semantik stabil, optional bleibt optional, Neues immer optional|
+|#108 |Tolerant Reader Pattern: unbekannte Felder und Enum-Werte ignorieren                                      |
+|#112 |Offene Enum-Listen — neue Werte können jederzeit hinzugefügt werden                                       |
+|C-12 |API-Spec in Git mit Tags, CHANGELOG und Pull Requests                                                     |
+|#187 |Deprecated Endpunkte in der Spec markieren mit Sunset-Datum                                               |
+|#189 |`Deprecation` und `Sunset` Response-Header setzen                                                         |
+|#185 |Konsumenten informieren, Mindestfristen einhalten, strukturierter Prozess                                 |
+|#186 |Externe Partner: Mindestfrist 6–12 Monate, offizielle Kanäle                                              |
+|#188 |Nutzung deprecated Endpunkte aktiv monitoren                                                              |
+|#190 |Alerts bei 90, 30 und 7 Tagen vor Sunset                                                                  |
+|#191 |Deprecated Endpunkte nicht neu verwenden                                                                  |
 
 ---
 # REST API Styleguide — Erklärungen auf Deutsch
