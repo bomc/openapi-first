@@ -23,6 +23,861 @@ Validates the definition.
 bomc:
   $example: ./for.code
 ```
+
+---
+
+# Datenformate und Typen — Leitfaden für Entwickler
+
+> Basierend auf den Regeln #118, #120, #122, #123, #124, #127, #144, #169, #170, #171, #174, #216, #235, #238, #240, #252, #255, C-07, C-11 des REST API Styleguides.
+
+-----
+
+## Warum einheitliche Datenformate?
+
+Ein aufrufender Dienst liest ein Datumsfeld und erhält `"2024-01-15"`. Ein anderer Endpunkt derselben API liefert `"15.01.2024"`, ein dritter `1705276800`. Alle drei beschreiben denselben Tag — aber keiner ist ohne Kontext klar, und alle drei erfordern unterschiedliche Parsing-Logik auf Konsumentenseite.
+
+Einheitliche Datenformate sind der Vertrag auf Feldebene. Sie legen fest wie Werte repräsentiert werden — unabhängig davon welche Sprache, welches Framework oder welches Team den Endpunkt konsumiert. Fehler auf dieser Ebene führen zu stillen Datenfehlern: ein falsch geparster Timestamp der um eine Stunde abweicht, ein Geldbetrag der durch Floating-Point-Arithmetik ungenau wird, ein Ländercode der nicht validiert und deshalb in verschiedenen Formaten gespeichert wird.
+
+-----
+
+## Property-Namen — snake_case (#118)
+
+Alle Property-Namen in JSON-Requests und -Responses werden in **snake_case** geschrieben. Das gilt ausnahmslos — für alle Felder, auf allen Ebenen, in allen Endpunkten.
+
+```json
+// ✓ Richtig — snake_case
+{
+  "order_id": "ord_abc123",
+  "customer_id": "cust_789",
+  "total_amount": 149.95,
+  "created_at": "2024-01-15T10:30:00Z",
+  "is_gift_wrapping_requested": false
+}
+
+// ✗ Falsch — camelCase
+{
+  "orderId": "ord_abc123",
+  "customerId": "cust_789",
+  "totalAmount": 149.95,
+  "createdAt": "2024-01-15T10:30:00Z",
+  "isGiftWrappingRequested": false
+}
+```
+
+Das gültige Zeichenmuster für Property-Namen lautet: `^[a-z_][a-z_0-9]*$`
+
+- Beginnt mit Kleinbuchstabe oder Unterstrich
+- Enthält nur Kleinbuchstaben, Unterstriche und Ziffern
+- Keine Grossbuchstaben, keine Bindestriche, keine Leerzeichen
+
+Abkürzungen werden wie reguläre Wörter behandelt:
+
+```json
+// ✓ Richtig
+{ "api_version": "v1", "sku_id": "SKU-001", "vat_rate": 0.19 }
+
+// ✗ Falsch
+{ "APIVersion": "v1", "SKUId": "SKU-001", "VATRate": 0.19 }
+```
+
+-----
+
+## Gemeinsame Feldnamen (#174)
+
+Bestimmte Felder kommen in fast jeder Ressource vor. Für diese gibt es festgelegte Namen die über alle Endpunkte hinweg identisch verwendet werden:
+
+|Feldname     |Typ                   |Bedeutung                                             |
+|-------------|----------------------|------------------------------------------------------|
+|`id`         |`string`              |Eindeutiger, unveränderlicher Bezeichner der Ressource|
+|`{entity}_id`|`string`              |Serverinterner Verweis auf eine andere Ressource      |
+|`created_at` |`string` (`date-time`)|Zeitpunkt der Erstellung — immer UTC                  |
+|`updated_at` |`string` (`date-time`)|Zeitpunkt der letzten Änderung — immer UTC            |
+|`etag`       |`string`              |Versionshash für optimistisches Locking               |
+
+```json
+{
+  "id": "ord_abc123",
+  "customer_id": "cust_789",
+  "warehouse_id": "wh_001",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T14:22:00Z",
+  "etag": "a1b2c3d4e5f6"
+}
+```
+
+Das `{entity}_id`-Muster gilt für alle Referenzen auf andere Ressourcen. Der Präfix entspricht dem Namen der referenzierten Ressource im Singular:
+
+```json
+// ✓ Richtig — {entity}_id Muster
+{ "customer_id": "cust_789", "product_id": "prod_abc", "warehouse_id": "wh_001" }
+
+// ✗ Falsch — abweichende Suffixe
+{ "customer_uid": "cust_789", "product_key": "prod_abc", "warehouseRef": "wh_001" }
+```
+
+-----
+
+## Zahlen und Integer (#171, #238)
+
+Jede numerische Property muss in der OpenAPI-Spezifikation ein explizites Format angeben. Ohne Format raten aufrufende Dienste die Präzision — und liegen oft falsch, was zu Datenverlust führt.
+
+### Integer-Formate
+
+```yaml
+properties:
+  quantity:
+    type: integer
+    format: int32        # 32-bit: -2.147.483.648 bis 2.147.483.647
+    minimum: 1
+
+  position:
+    type: integer
+    format: int64        # 64-bit: für grosse IDs und Zeitstempel
+    example: 7721071004
+
+  item_count:
+    type: integer
+    format: bigint       # Für sehr grosse Zahlen jenseits int64
+```
+
+Wann welches Format:
+
+|Format  |Wertebereich   |Verwenden für                                         |
+|--------|---------------|------------------------------------------------------|
+|`int32` |±2,1 Milliarden|Mengen, Positionen, Alter, Zähler                     |
+|`int64` |±9,2 Trillionen|Grosse IDs, Transaktionsnummern                       |
+|`bigint`|Unbegrenzt     |Finanzwerte ohne Dezimalstellen, kryptografische Werte|
+
+### Number-Formate
+
+```yaml
+properties:
+  price:
+    type: number
+    format: decimal      # Exakte Dezimalzahl — für Geldbeträge
+    minimum: 0
+    example: 149.95
+
+  weight_kg:
+    type: number
+    format: float        # 32-bit Fliesskomma — für Messwerte
+    example: 1.75
+
+  conversion_rate:
+    type: number
+    format: double       # 64-bit Fliesskomma — für wissenschaftliche Berechnungen
+    example: 1.08432
+```
+
+**Wichtig bei Geldbeträgen:** `float` und `double` sind für Währungen ungeeignet. IEEE 754 Fliesskommazahlen können Dezimalwerte wie `0.10` nicht exakt darstellen — `0.1 + 0.2` ergibt `0.30000000000000004`. Für Geldbeträge wird `decimal` verwendet:
+
+```json
+// ✓ Richtig — decimal für Geldbeträge
+{ "total_amount": 149.95, "tax_amount": 23.99, "currency_code": "EUR" }
+
+// ✗ Gefährlich — float für Geldbeträge
+{ "total_amount": 149.95000000000001 }   // mögliche Ausgabe nach float-Arithmetik
+```
+
+-----
+
+## Datum und Zeit (#169, #255, #235)
+
+### Das einheitliche Format — RFC 3339 / ISO 8601
+
+Alle Datums- und Zeitwerte werden als Strings im RFC 3339 / ISO 8601 Format übertragen. Unix-Timestamps als Integer sind nicht zulässig.
+
+```json
+// ✓ Richtig — RFC 3339
+{ "created_at": "2024-01-15T10:30:00Z" }
+
+// ✗ Falsch — Unix Timestamp
+{ "created_at": 1705312200 }
+
+// ✗ Falsch — Deutsches Datumsformat
+{ "created_at": "15.01.2024 10:30" }
+
+// ✗ Falsch — Kleinbuchstaben
+{ "created_at": "2024-01-15t10:30:00z" }
+```
+
+Drei unveränderliche Regeln:
+
+- Datum und Zeit werden mit grossem `T` getrennt
+- UTC-Zeitstempel enden mit grossem `Z`
+- Zeitstempel werden immer in UTC gespeichert — die Lokalisierung ist Aufgabe des aufrufenden Dienstes
+
+### Das richtige Format für jeden Anwendungsfall (#255)
+
+Nicht jeder Zeitwert benötigt eine vollständige UTC-Zeit. Die Wahl des Formats hängt davon ab was fachlich gemeint ist:
+
+**`date-time` — exakter absoluter Zeitpunkt in UTC**
+
+Für Ereignisse die einen genauen Moment beschreiben — unabhängig vom Standort:
+
+```json
+{
+  "created_at": "2024-01-15T10:30:00Z",
+  "shipped_at": "2024-01-16T08:15:00Z",
+  "expires_at": "2024-07-15T23:59:59Z"
+}
+```
+
+**`date` — Kalendertag ohne Uhrzeit**
+
+Für Datumsangaben bei denen die Uhrzeit keine Rolle spielt:
+
+```json
+{
+  "delivery_date": "2024-01-20",
+  "birth_date": "1985-03-22",
+  "valid_until": "2024-12-31"
+}
+```
+
+`delivery_date: "2024-01-20"` ist eindeutig der 20. Januar — unabhängig davon in welcher Zeitzone das Paket zugestellt wird. Als UTC-Timestamp `"2024-01-20T00:00:00Z"` wäre es in UTC+1 bereits der 20. Januar um 01:00 Uhr morgens — fachlich dasselbe, technisch verwirrend.
+
+**`time-local` — lokale Uhrzeit ohne Zeitzonenbezug**
+
+Für wiederkehrende Zeitangaben die sich mit der Ortszeit mitbewegen:
+
+```json
+{
+  "opening_time": "09:00:00",
+  "closing_time": "18:00:00"
+}
+```
+
+Ein Geschäft öffnet um 09:00 Uhr Ortszeit — in München wie in Wien. Eine Zeitzone wäre hier falsch, weil sich die Öffnungszeit bei Sommerzeit nicht verschiebt.
+
+**`date-time-local` — geplanter Zeitpunkt mit expliziter Zeitzone**
+
+Für Zeitpunkte die an eine bestimmte Zeitzone gebunden sind und sich mit der Sommerzeit mitbewegen sollen:
+
+```json
+{
+  "campaign_start": "2024-06-01T08:00:00",
+  "campaign_timezone": "Europe/Berlin"
+}
+```
+
+Als UTC gespeichert (`2024-06-01T06:00:00Z`) würde im Winter — wenn Berlin UTC+1 statt UTC+2 ist — die Kampagne um 07:00 Uhr starten statt um 08:00 Uhr. Die Zeitzone muss separat mitgeführt werden.
+
+### Entscheidungsbaum für Datum/Zeit-Felder
+
+```
+Wird eine Uhrzeit benötigt?
+├── Nein → date  (2024-01-20)
+└── Ja
+    ├── Absoluter Zeitpunkt — wann ist etwas passiert oder läuft ab?
+    │   └── date-time UTC  (2024-01-15T10:30:00Z)
+    │
+    ├── Wiederkehrende Ortszeit — wann öffnet/schliesst etwas?
+    │   └── time-local  (09:00:00)
+    │
+    └── Geplanter Zeitpunkt mit Zeitzonen-Semantik?
+        └── date-time-local + timezone  (2024-06-01T08:00:00 + Europe/Berlin)
+```
+
+### Feldnamen für Datum/Zeit (#235)
+
+Alle Properties die einen Zeitpunkt enthalten, erhalten den `_at`-Suffix:
+
+```json
+// ✓ Richtig — _at Suffix
+{
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T14:22:00Z",
+  "shipped_at": "2024-01-16T08:00:00Z",
+  "cancelled_at": null
+}
+
+// ✗ Falsch — fehlender oder falscher Suffix
+{
+  "created": "2024-01-15T10:30:00Z",
+  "update_time": "2024-01-15T14:22:00Z",
+  "shipDate": "2024-01-16T08:00:00Z"
+}
+```
+
+Reine Datumsfelder (ohne Uhrzeit) erhalten je nach Semantik einen beschreibenden Namen:
+
+```json
+{
+  "delivery_date": "2024-01-20",
+  "valid_until": "2024-12-31",
+  "birth_date": "1985-03-22"
+}
+```
+
+### Zeitdauern und Intervalle (#127)
+
+Zeitdauern werden als ISO 8601 Duration Strings dargestellt — nicht als Sekunden-Integer:
+
+```json
+// ✓ Richtig — ISO 8601 Duration
+{ "processing_time": "PT30M" }       // 30 Minuten
+{ "validity_period": "P30D" }        // 30 Tage
+{ "session_timeout": "PT1H30M" }     // 1 Stunde 30 Minuten
+{ "contract_duration": "P1Y6M" }     // 1 Jahr 6 Monate
+
+// ✗ Falsch — Sekunden als Integer
+{ "processing_time": 1800 }          // Was ist 1800? Sekunden? Millisekunden?
+```
+
+Das ISO 8601 Format ist selbstbeschreibend: `P` leitet die Dauer ein, `T` trennt Datum von Uhrzeit innerhalb der Dauer:
+
+```
+P   = Period (Dauer)
+1Y  = 1 Jahr
+6M  = 6 Monate (oder Minuten nach T)
+2W  = 2 Wochen
+3D  = 3 Tage
+T   = Trennzeichen für Uhrzeitkomponenten
+4H  = 4 Stunden
+5M  = 5 Minuten (nach T)
+6S  = 6 Sekunden
+```
+
+Für Zeitintervalle (Anfang und Ende) gibt es zwei Notationen:
+
+```json
+// Anfang und Ende explizit
+{ "valid_between": "2024-01-01T00:00:00Z/2024-12-31T23:59:59Z" }
+
+// Anfang und Dauer
+{ "valid_between": "2024-01-01T00:00:00Z/P1Y" }
+```
+
+Als Query-Parameter wird `{feld}_between` statt getrennter `before`/`after`-Parameter verwendet:
+
+```
+GET /v1/orders?created_at_between=2024-01-01T00:00:00Z/2024-12-31T23:59:59Z
+```
+
+-----
+
+## Standardformate für internationale Felder (#170)
+
+Für Länder, Sprachen und Währungen werden ausschliesslich die internationalen Normen verwendet:
+
+|Datentyp        |Norm              |Format            |Beispiele                      |
+|----------------|------------------|------------------|-------------------------------|
+|Land            |ISO 3166-1 alpha-2|`iso-3166-alpha-2`|`"DE"`, `"CH"`, `"AT"`, `"GB"` |
+|Sprache         |ISO 639-1         |`iso-639-1`       |`"de"`, `"en"`, `"fr"`         |
+|Sprache + Region|BCP 47            |`bcp47`           |`"de-AT"`, `"en-GB"`, `"fr-CH"`|
+|Währung         |ISO 4217          |`iso-4217`        |`"EUR"`, `"CHF"`, `"USD"`      |
+
+```json
+// ✓ Richtig — Normen
+{
+  "country_code": "DE",
+  "language_code": "de",
+  "locale": "de-AT",
+  "currency_code": "EUR"
+}
+
+// ✗ Falsch — eigene Formate
+{
+  "country": "Deutschland",
+  "language": "German",
+  "currency": "Euro",
+  "currency_symbol": "€"
+}
+```
+
+In OpenAPI mit dem jeweiligen Format dokumentieren:
+
+```yaml
+properties:
+  country_code:
+    type: string
+    format: iso-3166-alpha-2
+    pattern: '^[A-Z]{2}$'
+    example: "DE"
+
+  currency_code:
+    type: string
+    format: iso-4217
+    pattern: '^[A-Z]{3}$'
+    example: "EUR"
+
+  locale:
+    type: string
+    format: bcp47
+    example: "de-AT"
+```
+
+-----
+
+## Enumerationen (#240, #112)
+
+Enum-Werte werden in **UPPER_SNAKE_CASE** geschrieben:
+
+```yaml
+status:
+  type: string
+  x-extensible-enum:
+    - OPEN
+    - IN_PROGRESS
+    - COMPLETED
+    - CANCELLED
+  description: |
+    Order status.
+    New values may be added in future versions.
+    Clients must handle unknown values gracefully.
+```
+
+```json
+// ✓ Richtig
+{ "status": "IN_PROGRESS" }
+
+// ✗ Falsch — camelCase
+{ "status": "inProgress" }
+
+// ✗ Falsch — Kleinbuchstaben
+{ "status": "in_progress" }
+
+// ✗ Falsch — Leerzeichen
+{ "status": "In Progress" }
+```
+
+### Offene Enum-Listen (#112)
+
+Enum-Listen werden als offen deklariert: neue Werte können in zukünftigen API-Versionen hinzugefügt werden ohne einen Breaking Change auszulösen. Aufrufende Dienste müssen unbekannte Enum-Werte tolerieren — weder mit Fehler ablehnen noch als ungültigen Zustand behandeln:
+
+```yaml
+# x-extensible-enum statt enum — signalisiert offene Liste
+status:
+  type: string
+  x-extensible-enum:
+    - OPEN
+    - IN_PROGRESS
+    - COMPLETED
+    - CANCELLED
+    # Zukünftig möglich: PARTIALLY_DELIVERED, ON_HOLD, ...
+```
+
+Ein aufrufender Dienst implementiert die Toleranz explizit:
+
+```javascript
+// ✓ Robust — unbekannte Werte werden toleriert
+switch (order.status) {
+  case 'OPEN':      handleOpen(order); break;
+  case 'COMPLETED': handleCompleted(order); break;
+  default:
+    // Unbekannter Status: ignorieren oder als generischen Zustand behandeln
+    handleUnknown(order);
+}
+
+// ✗ Fehleranfällig — bricht bei neuen Enum-Werten
+const KNOWN_STATUSES = ['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
+if (!KNOWN_STATUSES.includes(order.status)) {
+  throw new Error(`Unknown status: ${order.status}`);
+}
+```
+
+-----
+
+## Null-Werte und fehlende Felder (#123, #122, #124)
+
+### Gleiche Semantik für null und fehlendes Feld (#123)
+
+Fehlendes Feld und explizites `null` müssen für aufrufende Dienste identisch behandelt werden:
+
+```json
+// Diese beiden sind semantisch äquivalent
+{ "id": "ord_123" }
+{ "id": "ord_123", "discount_percentage": null }
+```
+
+Das hat direkte Konsequenzen für OpenAPI: Ein optionales Feld wird nie gleichzeitig als `nullable: true` und ohne `required` definiert — das würde zwei verschiedene Abwesenheitszustände mit potenziell unterschiedlichen Semantiken erzeugen:
+
+```yaml
+# ✓ Richtig — optional, aber niemals null
+discount_percentage:
+  type: number
+  format: decimal
+  # kein required → darf fehlen
+  # kein nullable  → darf nicht explizit null sein
+
+# ✗ Falsch — darf fehlen UND null sein (doppelte Semantik)
+discount_percentage:
+  type: number
+  nullable: true   # Nicht kombinieren mit fehlendem required
+```
+
+### Boolean-Felder — kein null (#122)
+
+Boolean-Felder kennen zwei Zustände: `true` und `false`. Ein dritter Zustand `null` ist kein Boolean-Wert sondern ein eigener fachlicher Zustand der einen eigenen Typ erfordert.
+
+Ist das Boolean-Feld optional und bedeutet “fehlendes Feld” dasselbe wie “nicht gesetzt”, wird das Feld einfach weggelassen:
+
+```json
+// ✓ Noch keine Auswahl getroffen — Feld fehlt
+{ "id": "ord_123", "status": "OPEN" }
+
+// ✓ Aktiv gewählt
+{ "id": "ord_123", "is_gift_wrapping_requested": true }
+
+// ✗ Verboten
+{ "id": "ord_123", "is_gift_wrapping_requested": null }
+```
+
+Existieren drei fachlich unterschiedliche Zustände, wird ein Enum verwendet:
+
+```yaml
+# Drei Zustände → Enum statt nullable Boolean
+terms_acceptance:
+  type: string
+  enum: [ACCEPTED, DECLINED, PENDING]
+```
+
+### Leere Arrays — kein null (#124)
+
+Ein leeres Array ist ein valider Zustand und wird als `[]` zurückgegeben — nicht als `null`:
+
+```json
+// ✓ Richtig — kein Eintrag vorhanden
+{ "items": [], "tags": [] }
+
+// ✗ Falsch — null statt leeres Array
+{ "items": null, "tags": null }
+```
+
+-----
+
+## Array-Namen (#120)
+
+Array-Namen werden immer im Plural geschrieben:
+
+```json
+// ✓ Richtig
+{
+  "items": [...],
+  "addresses": [...],
+  "line_items": [...],
+  "product_ids": [...]
+}
+
+// ✗ Falsch — Singular für Arrays
+{
+  "item": [...],
+  "address": [...],
+  "line_item": [...]
+}
+```
+
+-----
+
+## Maps und dynamische Schlüssel (#216)
+
+Wenn ein Objekt als Key-Value-Map verwendet wird — also mit variablen Schlüsseln — wird es in OpenAPI mit `additionalProperties` definiert:
+
+```yaml
+# Übersetzungen — Schlüssel sind BCP-47 Sprachcodes
+translations:
+  type: object
+  additionalProperties:
+    type: string
+  description: |
+    Map of translations keyed by BCP-47 language code.
+  example:
+    de: "Bestellung"
+    en: "Order"
+    fr: "Commande"
+```
+
+```json
+{
+  "id": "prod_abc",
+  "name": "Winter Jacket",
+  "translations": {
+    "de": "Winterjacke",
+    "fr": "Veste d'hiver",
+    "it": "Giacca invernale"
+  }
+}
+```
+
+-----
+
+## UUIDs — nur wenn notwendig (#144)
+
+UUIDs sind sinnvoll wenn IDs dezentral generiert werden müssen ohne Koordination zwischen Services. Sie haben aber Nachteile:
+
+- Schwer lesbar in Logs und beim Debugging
+- Nicht sortierbar nach Erstellungszeit (ausser UUID v7)
+- Höherer Speicherverbrauch als numerische IDs
+- Datenbankindizes werden fragmentiert
+
+```json
+// UUID — dezentrale Generierung, kein Koordinationsaufwand
+{ "id": "e2ab873e-b295-11e9-9c02-68f728c1ba70" }
+
+// Serverseitige ID — lesbar, sortierbar, kompakt
+{ "id": "ord_abc123" }
+```
+
+Wenn IDs ausschliesslich serverseitig generiert werden und kein Bedarf an dezentraler Erzeugung besteht, wird UUID vermieden. Die Alternative ist eine serverseitig generierte ID mit fachlichem Präfix (`ord_`, `cust_`, `prod_`) die Typ und Kontext sofort erkennbar macht.
+
+-----
+
+## Einheitliches Schema für Lesen und Schreiben (#252)
+
+Für Requests (POST/PUT/PATCH) und Responses (GET) wird dasselbe Schema verwendet. Unterschiede werden innerhalb des Schemas über `readOnly` und `writeOnly` ausgedrückt:
+
+```yaml
+components:
+  schemas:
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true       # Nur in Response — vom Server vergeben
+          example: "ord_abc123"
+
+        external_order_id:
+          type: string
+          writeOnly: false     # In Request und Response
+          example: "ERP-2024-001"
+
+        status:
+          type: string
+          readOnly: true       # Nur in Response — serverseitig gesteuert
+          x-extensible-enum: [OPEN, IN_PROGRESS, COMPLETED, CANCELLED]
+
+        total_amount:
+          type: number
+          format: decimal
+          readOnly: true       # Nur in Response — serverseitig berechnet
+
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true       # Nur in Response — vom Server gesetzt
+
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true       # Nur in Response — vom Server gesetzt
+```
+
+Dieses Schema wird für GET, POST und PUT gleichermassen verwendet. Ein separates `OrderRequest`-Schema ist nur dann nötig wenn strukturelle Unterschiede zwischen Lesen und Schreiben existieren, die nicht über `readOnly`/`writeOnly` ausgedrückt werden können.
+
+-----
+
+## Metadata-Felder (C-07, C-11)
+
+Veränderbare Ressourcen SOLLTEN ein optionales `metadata`-Feld für strukturierte Zusatzdaten unterstützen. Das ermöglicht Erweiterbarkeit ohne Breaking Changes:
+
+```json
+{
+  "id": "ord_abc123",
+  "status": "OPEN",
+  "metadata": {
+    "erp_order_id": "ERP-2024-00847",
+    "cost_center": "CC-001",
+    "campaign": "summer24"
+  }
+}
+```
+
+`metadata` und `description` haben unterschiedliche Zwecke und dürfen nicht verwechselt werden:
+
+|Feld         |Typ     |Zweck                           |Verarbeitung                                                 |
+|-------------|--------|--------------------------------|-------------------------------------------------------------|
+|`description`|`string`|Menschenlesbarer Freitext       |Wird ggf. im UI angezeigt                                    |
+|`metadata`   |`object`|Maschinenlesbare Key-Value-Daten|Wird gespeichert und zurückgegeben — keine Verarbeitungslogik|
+
+Regeln für `metadata`-Felder:
+
+- Keys: snake_case, max. 40 Zeichen
+- Values: nur Strings, max. 500 Zeichen
+- Maximal 50 Key-Value-Paare pro Ressource
+- Keine sensitiven Daten (Passwörter, Tokens, Bankdaten)
+
+-----
+
+## Vollständiges OpenAPI-Beispiel
+
+Ein vollständig typisiertes Order-Schema das alle Konventionen dieses Leitfadens anwendet:
+
+```yaml
+components:
+  schemas:
+    Order:
+      type: object
+      required: [items]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Server-assigned unique identifier.
+          example: "ord_abc123"
+
+        external_order_id:
+          type: string
+          maxLength: 100
+          description: Optional client-provided identifier for idempotency.
+          example: "ERP-2024-00847"
+
+        customer_id:
+          type: string
+          description: Reference to the customer resource.
+          example: "cust_789"
+
+        status:
+          type: string
+          readOnly: true
+          x-extensible-enum: [OPEN, IN_PROGRESS, COMPLETED, CANCELLED]
+          description: |
+            Current order status.
+            New values may be added in future versions.
+
+        total_amount:
+          type: number
+          format: decimal
+          readOnly: true
+          minimum: 0
+          description: Total order amount including taxes.
+          example: 149.95
+
+        currency_code:
+          type: string
+          format: iso-4217
+          pattern: '^[A-Z]{3}$'
+          example: "EUR"
+
+        country_code:
+          type: string
+          format: iso-3166-alpha-2
+          pattern: '^[A-Z]{2}$'
+          example: "DE"
+
+        delivery_date:
+          type: string
+          format: date
+          description: Requested delivery date (calendar day, no time component).
+          example: "2024-01-20"
+
+        is_gift_wrapping_requested:
+          type: boolean
+          nullable: false
+          description: |
+            Whether gift wrapping was requested.
+            Omitted if no selection has been made yet.
+
+        terms_acceptance:
+          type: string
+          enum: [ACCEPTED, DECLINED, PENDING]
+          description: Status of terms and conditions acceptance.
+
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OrderItem'
+
+        tags:
+          type: array
+          items:
+            type: string
+          description: Optional tags. Empty array if no tags assigned.
+          example: []
+
+        translations:
+          type: object
+          additionalProperties:
+            type: string
+          description: Translations keyed by BCP-47 language code.
+
+        metadata:
+          type: object
+          propertyNames:
+            pattern: '^[a-z][a-z0-9_]{0,39}$'
+          additionalProperties:
+            type: string
+            maxLength: 500
+          maxProperties: 50
+          description: |
+            Optional key-value pairs for extensibility.
+            Do not store sensitive data.
+
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Creation timestamp in UTC.
+          example: "2024-01-15T10:30:00Z"
+
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Last modification timestamp in UTC.
+          example: "2024-01-15T14:22:00Z"
+
+        etag:
+          type: string
+          readOnly: true
+          description: Version hash for optimistic locking.
+          example: "a1b2c3d4e5f6"
+```
+
+-----
+
+## Häufige Fehler
+
+**camelCase statt snake_case.** Code-Generatoren aus Java- oder TypeScript-Klassen produzieren automatisch camelCase. Ohne explizite Konfiguration des Serialisierungs-Frameworks (`@JsonProperty`, `snake_case`-Konfiguration) werden alle Properties in camelCase ausgegeben.
+
+**`float` für Geldbeträge verwenden.** `total_amount: 149.95` gespeichert als `float` kann als `149.95000000000001` zurückkommen. Bei Berechnungen akkumulieren sich diese Fehler. Für Geldbeträge wird immer `decimal` verwendet.
+
+**Unix-Timestamps statt ISO 8601.** `"created_at": 1705312200` ist nicht menschenlesbar, erfordert Konvertierungslogik und hat kein eingebautes Timezone-Handling. ISO 8601 ist universell verständlich und direkt in OpenAPI als `date-time` typisierbar.
+
+**Fehlenden `_at`-Suffix bei Zeitstempeln.** `"created"`, `"modified"`, `"updated"` statt `"created_at"`, `"updated_at"`. Ohne Konvention weiss der aufrufende Dienst nicht ob das Feld ein Datum, ein Zeitstempel oder ein anderer Wert ist.
+
+**`nullable: true` ohne `required` für optionale Felder.** Das erzeugt doppelte Abwesenheitssemantik: fehlendes Feld und `null` könnten unterschiedlich interpretiert werden. Optionale Felder werden ohne `required` und ohne `nullable: true` definiert.
+
+**Enum-Werte in camelCase oder Kleinbuchstaben.** `"status": "inProgress"` oder `"status": "in_progress"` statt `"status": "IN_PROGRESS"`. Inkonsistente Gross-/Kleinschreibung bei Enums ist eine häufige Quelle von Parsing-Fehlern.
+
+**Ländernamen statt ISO-Codes.** `"country": "Germany"` statt `"country_code": "DE"`. Ländernamen variieren je nach Sprache und Schreibweise — `"Deutschland"`, `"Germany"`, `"Allemagne"` beschreiben alle dasselbe Land. ISO 3166-1 alpha-2 ist eindeutig, zweibuchstabig und sprachunabhängig.
+
+**Array als Top-Level-Struktur.** `GET /v1/orders` gibt `[...]` direkt zurück statt `{ "items": [...] }`. Damit können später keine Pagination-Metadaten oder andere Felder ohne Breaking Change hinzugefügt werden.
+
+-----
+
+## Zusammenfassung
+
+|Regel|Kernaussage                                                                  |
+|-----|-----------------------------------------------------------------------------|
+|#118 |snake_case für alle Property-Namen — niemals camelCase                       |
+|#174 |Standard-Feldnamen: `id`, `{entity}_id`, `created_at`, `updated_at`, `etag`  |
+|#171 |Explizites Format für alle Zahlen: `int32`, `int64`, `decimal`, `float`      |
+|#238 |Standard-Formate für alle Typen — URI, UUID, E-Mail, Datum, Sprache          |
+|#169 |Datum/Zeit als RFC 3339 / ISO 8601 — kein Unix Timestamp                     |
+|#255 |Richtiges Format wählen: `date-time`, `date`, `time-local`, `date-time-local`|
+|#235 |`_at`-Suffix für alle Zeitstempel-Properties                                 |
+|#127 |Zeitdauern als ISO 8601 Duration (`PT30M`, `P1Y`) — kein Sekunden-Integer    |
+|#170 |ISO-Normen für Land (3166), Sprache (639-1 / BCP 47), Währung (4217)         |
+|#240 |Enum-Werte in UPPER_SNAKE_CASE                                               |
+|#112 |Offene Enum-Listen mit `x-extensible-enum` — neue Werte ohne Breaking Change |
+|#123 |Gleiche Semantik für `null` und fehlendes Feld — nicht kombinieren           |
+|#122 |Kein `null` für Boolean — Feld weglassen oder Enum verwenden                 |
+|#124 |Leere Arrays als `[]` — nicht als `null`                                     |
+|#120 |Array-Namen im Plural                                                        |
+|#144 |UUIDs nur wenn dezentrale ID-Generierung nötig ist                           |
+|#216 |Maps mit `additionalProperties` in OpenAPI definieren                        |
+|#252 |Einheitliches Schema für Lesen und Schreiben — `readOnly`/`writeOnly`        |
+|C-07 |`metadata`-Feld für erweiterbare Zusatzdaten                                 |
+|C-11 |`description` und `metadata` klar trennen                                    |
+
 ---
 
 # Idempotenz, Sicherheit und Caching von HTTP-Methoden — Leitfaden für Entwickler
