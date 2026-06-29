@@ -25,1619 +25,598 @@ bomc:
 ```
 ---
 
-openapi: 3.1.0
-
-# ─────────────────────────────────────────────────────────────
-# Meta-Informationen (#218, #215, #219, #116)
-# ─────────────────────────────────────────────────────────────
-info:
-  title: order-management-api                         # kebab-case, endet auf -api (#218 + C-12 Namenskonvention)
-  version: 1.2.0                                      # Semantic Versioning (#116)
-  description: |
-    REST API for managing customer orders.
-    Supports creating, reading, updating and cancelling orders
-    including order items and delivery information.
-  contact:
-    name: Platform Team
-    email: platform-team@company.com
-    url: https://wiki.company.com/apis/order-management
-  x-api-id: d0184f38-b98d-11e7-9c56-68f728c1ba70     # Unveränderliche UUID (#215)
-  x-audience: external-partner                         # Zielgruppe (#219)
-
-externalDocs:
-  description: Order Management API — Developer Guide
-  url: https://developer.company.com/guides/order-management
-
-# ─────────────────────────────────────────────────────────────
-# Server (#101 — Spec zusammen mit Service deployed)
-# ─────────────────────────────────────────────────────────────
-servers:
-  - url: https://api.company.com/v1
-    description: Production
-  - url: https://api.staging.company.com/v1
-    description: Staging
-
-# ─────────────────────────────────────────────────────────────
-# Globale Sicherheit (#104 — alle Endpunkte absichern)
-# Ausnahmen: /health, /ready, /openapi.yaml mit security: []
-# ─────────────────────────────────────────────────────────────
-security:
-  - OAuth2: [read:orders]
-
-# ─────────────────────────────────────────────────────────────
-# Endpunkte
-# ─────────────────────────────────────────────────────────────
-paths:
-
-  # ── Infrastruktur-Endpunkte (#104 Ausnahme) ────────────────
-
-  /health:
-    get:
-      summary: Liveness check
-      description: Returns service health status. No authentication required.
-      operationId: getHealth
-      tags: [Infrastructure]
-      security: []                                     # Explizit kein Auth (#104 Ausnahme)
-      responses:
-        '200':
-          description: Service is healthy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthStatus'
-        '503':
-          description: Service is unhealthy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthStatus'
-
-  /ready:
-    get:
-      summary: Readiness check
-      description: Returns whether the service is ready to accept traffic.
-      operationId: getReadiness
-      tags: [Infrastructure]
-      security: []                                     # Explizit kein Auth (#104 Ausnahme)
-      responses:
-        '200':
-          description: Service is ready
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthStatus'
-        '503':
-          description: Service is not ready yet
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthStatus'
-
-  # ── Orders Collection (#134 Plural, #129 kebab-case, C-01 Versionierung) ──
-
-  /orders:
-    get:
-      summary: List orders
-      description: |
-        Returns a paginated list of orders.
-        Results are sorted by `created_at` descending by default.
-      operationId: listOrders
-      tags: [Orders]
-      security:
-        - OAuth2: [read:orders]
-      parameters:
-        - $ref: '#/components/parameters/Traceparent'  # C-03 W3C Trace Context
-        - $ref: '#/components/parameters/Cursor'       # Pagination (#159, #160)
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Sort'
-        - $ref: '#/components/parameters/Fields'       # Feldauswahl (#157)
-        - name: status
-          in: query
-          required: false
-          style: form                                  # Collection-Format (#154)
-          explode: false
-          schema:
-            type: array
-            items:
-              type: string
-              enum: [OPEN, IN_PROGRESS, COMPLETED, CANCELLED]
-          description: |
-            Filter by order status. Multiple values comma-separated.
-            Example: ?status=OPEN,IN_PROGRESS
-          example: "OPEN,IN_PROGRESS"
-        - name: customer_id
-          in: query
-          required: false
-          schema:
-            type: string
-          description: Filter by customer ID.
-        - name: created_at_between
-          in: query
-          required: false
-          schema:
-            type: string
-          description: |
-            Filter by creation date range as ISO 8601 interval.
-            Example: ?created_at_between=2024-01-01T00:00:00Z/2024-12-31T23:59:59Z
-      responses:
-        '200':
-          description: Paginated list of orders
-          headers:
-            Cache-Control:
-              schema:
-                type: string
-                example: "no-cache"
-            ETag:
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/OrderPage'
-              example:
-                items:
-                  - id: "ord_abc123"
-                    customer_id: "cust_789"
-                    status: "OPEN"
-                    total_amount: 149.95
-                    currency_code: "EUR"
-                    created_at: "2024-01-15T10:30:00Z"
-                    updated_at: "2024-01-15T10:30:00Z"
-                cursor:
-                  next: "eyJpZCI6Im9yZF9hYmMxMjMifQ"
-                  prev: null
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-    post:
-      summary: Create an order
-      operationId: createOrder
-      tags: [Orders]
-      security:
-        - OAuth2: [write:orders]
-      parameters:
-        - $ref: '#/components/parameters/Traceparent'
-        - name: Idempotency-Key                        # Idempotenz (#229, #230)
-          in: header
-          required: false
-          schema:
-            type: string
-            format: uuid
-          description: |
-            Optional UUID for idempotent request handling.
-            Repeated requests with the same key return the cached response.
-            Keys are stored for 24 hours.
-          example: "7f7e3c1a-4b8d-4f6e-9a2b-1c3d5e7f9a0b"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/OrderRequest'
-      responses:
-        '201':
-          description: Order created successfully
-          headers:
-            Location:
-              schema:
-                type: string
-              description: URL of the created order
-              example: "/v1/orders/ord_abc123"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Order'
-        '200':
-          description: Existing order returned (idempotent repeat)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Order'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '422':
-          $ref: '#/components/responses/UnprocessableEntity'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  # ── Order Resource (#143 Sub-Ressourcen via Pfadsegmente) ──
-
-  /orders/{order_id}:
-    parameters:
-      - name: order_id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Unique order identifier.
-        example: "ord_abc123"
-      - $ref: '#/components/parameters/Traceparent'
-
-    get:
-      summary: Get order by ID
-      operationId: getOrder
-      tags: [Orders]
-      security:
-        - OAuth2: [read:orders]
-      parameters:
-        - $ref: '#/components/parameters/Fields'
-        - $ref: '#/components/parameters/Embed'        # Sub-Ressourcen einbetten (#158)
-        - name: If-None-Match                          # Bedingter GET (#182)
-          in: header
-          required: false
-          schema:
-            type: string
-          description: ETag for conditional request. Returns 304 if unchanged.
-      responses:
-        '200':
-          description: Order details
-          headers:
-            Cache-Control:
-              schema:
-                type: string
-                example: "no-cache"
-            ETag:
-              schema:
-                type: string
-                example: "\"a1b2c3d4e5f6\""
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Order'
-        '304':
-          description: Not Modified — cached response is still valid
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-    patch:
-      summary: Update order (partial)
-      operationId: updateOrder
-      tags: [Orders]
-      security:
-        - OAuth2: [write:orders]
-      parameters:
-        - name: If-Match                               # Optimistisches Locking (#182)
-          in: header
-          required: false
-          schema:
-            type: string
-          description: |
-            ETag for optimistic locking.
-            If provided and the resource has changed, returns 409 Conflict.
-          example: "\"a1b2c3d4e5f6\""
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/OrderPatch'
-      responses:
-        '200':
-          description: Order updated
-          headers:
-            ETag:
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Order'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '422':
-          $ref: '#/components/responses/UnprocessableEntity'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-    delete:
-      summary: Cancel order
-      operationId: deleteOrder
-      tags: [Orders]
-      security:
-        - OAuth2: [write:orders]
-      responses:
-        '204':
-          description: Order cancelled successfully
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  # ── Search (#237, #141 /search Ausnahme) ───────────────────
-
-  /orders/search:
-    post:
-      summary: Search orders (complex filters)
-      description: |
-        Search orders with complex filter expressions.
-        Use GET /orders with query parameters for simple filters.
-        Results are paginated using cursor-based pagination.
-      operationId: searchOrders
-      tags: [Orders]
-      security:
-        - OAuth2: [read:orders]
-      parameters:
-        - $ref: '#/components/parameters/Traceparent'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/OrderSearchRequest'
-      responses:
-        '200':
-          description: Search results
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/OrderPage'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '422':
-          $ref: '#/components/responses/UnprocessableEntity'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  # ── Batch (#141 /batch Ausnahme, #152 Code 207) ────────────
-
-  /orders/batch:
-    post:
-      summary: Create multiple orders (batch)
-      operationId: batchCreateOrders
-      tags: [Orders]
-      security:
-        - OAuth2: [write:orders]
-      parameters:
-        - $ref: '#/components/parameters/Traceparent'
-        - name: Idempotency-Key
-          in: header
-          required: false
-          schema:
-            type: string
-            format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/OrderBatchRequest'
-      responses:
-        '207':
-          description: Multi-status — check individual item status (#152)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/OrderBatchResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  # ── Sub-Ressource: Order Items (#143) ──────────────────────
-
-  /orders/{order_id}/order-items:                      # kebab-case (#129), Plural (#134)
-    parameters:
-      - name: order_id
-        in: path
-        required: true
-        schema:
-          type: string
-        example: "ord_abc123"
-      - $ref: '#/components/parameters/Traceparent'
-
-    get:
-      summary: List order items
-      operationId: listOrderItems
-      tags: [Order Items]
-      security:
-        - OAuth2: [read:orders]
-      parameters:
-        - $ref: '#/components/parameters/Cursor'
-        - $ref: '#/components/parameters/Limit'
-      responses:
-        '200':
-          description: Paginated list of order items
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/OrderItemPage'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-# ─────────────────────────────────────────────────────────────
-# Wiederverwendbare Komponenten
-# ─────────────────────────────────────────────────────────────
-components:
-
-  # ── Security Schemes (#104, #105, C-06) ────────────────────
-  securitySchemes:
-    OAuth2:
-      type: oauth2
-      flows:
-        clientCredentials:
-          tokenUrl: https://auth.company.com/oauth/token
-          scopes:
-            read:orders: Read orders and order items        # C-06: {action}:{resource}
-            write:orders: Create, update and cancel orders
-            admin:orders: Administrative operations on orders
-
-  # ── Parameter-Definitionen ──────────────────────────────────
-  parameters:
-
-    Traceparent:                                           # C-03 W3C Trace Context
-      name: traceparent
-      in: header
-      required: false
-      schema:
-        type: string
-        pattern: '^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
-        example: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-      description: |
-        W3C Trace Context header for distributed tracing.
-        If not provided, a new trace is generated by the gateway.
-
-    Cursor:                                               # Pagination (#159, #160)
-      name: cursor
-      in: query
-      required: false
-      schema:
-        type: string
-      description: |
-        Opaque server-internal reference for cursor-based pagination.
-        Obtained from a previous response. Do not construct or decode.
-        Cursors expire after 24 hours.
-
-    Limit:
-      name: limit
-      in: query
-      required: false
-      schema:
-        type: integer
-        format: int32
-        minimum: 1
-        maximum: 100
-        default: 20
-      description: Maximum number of items per page.
-
-    Sort:                                                 # #137 Konventioneller Parameter
-      name: sort
-      in: query
-      required: false
-      style: form
-      explode: false
-      schema:
-        type: array
-        items:
-          type: string
-      description: |
-        Sort fields as comma-separated list.
-        Prefix with + for ascending (default), - for descending.
-        Example: ?sort=-created_at,+status
-
-    Fields:                                               # #157 Feldauswahl
-      name: fields
-      in: query
-      required: false
-      style: form
-      explode: false
-      schema:
-        type: array
-        items:
-          type: string
-      description: |
-        Comma-separated list of fields to include in the response.
-        Example: ?fields=id,status,total_amount,created_at
-
-    Embed:                                                # #158 Sub-Ressourcen einbetten
-      name: embed
-      in: query
-      required: false
-      style: form
-      explode: false
-      schema:
-        type: array
-        items:
-          type: string
-          enum: [order-items, customer]
-      description: |
-        Comma-separated list of sub-resources to embed.
-        Example: ?embed=order-items,customer
-
-  # ── Schemas ─────────────────────────────────────────────────
-  schemas:
-
-    # Order — Hauptressource
-    Order:
-      type: object                                        # Immer Objekt (#110)
-      required: [id, customer_id, status, items, currency_code, created_at, updated_at]
-      properties:
-        id:
-          type: string
-          readOnly: true                                  # Nur in Response (#252)
-          description: Server-assigned unique identifier.
-          example: "ord_abc123"
-
-        external_order_id:
-          type: string
-          maxLength: 100
-          description: |
-            Optional client-provided identifier for idempotency.
-            If an order with this ID already exists, the existing order is returned.
-          example: "ERP-2024-00847"
-
-        customer_id:
-          type: string
-          description: Reference to the customer resource.  # {entity}_id Muster (#174)
-          example: "cust_789"
-
-        warehouse_id:
-          type: string
-          description: Reference to the fulfilling warehouse.
-          example: "wh_001"
-
-        status:
-          type: string
-          readOnly: true
-          x-extensible-enum:                             # Offene Enum-Liste (#112)
-            - OPEN
-            - IN_PROGRESS
-            - COMPLETED
-            - CANCELLED
-          description: |
-            Current order status.
-            New values may be added in future versions. Handle unknown values gracefully.
-          example: "OPEN"
-
-        total_amount:
-          type: number
-          format: decimal                                 # Decimal für Geldbeträge (#171)
-          readOnly: true
-          minimum: 0
-          description: Total order amount including taxes.
-          example: 149.95
-
-        tax_amount:
-          type: number
-          format: decimal
-          readOnly: true
-          minimum: 0
-          description: Tax portion of the total amount.
-          example: 23.99
-
-        currency_code:
-          type: string
-          format: iso-4217                               # ISO 4217 (#170)
-          pattern: '^[A-Z]{3}$'
-          description: Currency code (ISO 4217).
-          example: "EUR"
-
-        country_code:
-          type: string
-          format: iso-3166-alpha-2                       # ISO 3166 (#170)
-          pattern: '^[A-Z]{2}$'
-          description: Destination country code (ISO 3166-1 alpha-2).
-          example: "DE"
-
-        locale:
-          type: string
-          format: bcp47                                  # BCP 47 (#170)
-          description: Customer locale (BCP 47).
-          example: "de-AT"
-
-        delivery_date:
-          type: string
-          format: date                                   # Nur Datum — kein Zeitstempel (#255)
-          description: Requested delivery date.
-          example: "2024-01-20"
-
-        processing_time:
-          type: string
-          format: duration                               # ISO 8601 Duration (#127)
-          description: Estimated processing time as ISO 8601 duration.
-          example: "PT4H"
-
-        is_gift_wrapping_requested:
-          type: boolean
-          nullable: false                                # Kein null für Boolean (#122)
-          description: |
-            Whether gift wrapping was requested.
-            Omitted if no selection has been made yet (equivalent to not set).
-
-        terms_acceptance:
-          type: string
-          enum: [ACCEPTED, DECLINED, PENDING]            # Enum statt nullable Boolean (#122)
-          description: Status of terms and conditions acceptance.
-          example: "ACCEPTED"
-
-        items:
-          type: array                                    # Array-Name Plural (#120)
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/OrderItem'
-
-        tags:
-          type: array                                    # Leeres Array statt null (#124)
-          items:
-            type: string
-            maxLength: 50
-          description: Optional tags. Empty array if none assigned.
-          example: []
-
-        translations:
-          type: object
-          additionalProperties:                          # Map mit additionalProperties (#216)
-            type: string
-          description: Order descriptions keyed by BCP-47 language code.
-          example:
-            de: "Winterjacke Bestellung"
-            en: "Winter Jacket Order"
-
-        metadata:
-          type: object                                   # C-07 Metadata-Feld
-          propertyNames:
-            pattern: '^[a-z][a-z0-9_]{0,39}$'          # snake_case Keys
-          additionalProperties:
-            type: string
-            maxLength: 500
-          maxProperties: 50
-          description: |
-            Optional key-value pairs for extensibility.
-            Keys: snake_case, max 40 characters.
-            Do not store sensitive data (passwords, tokens, payment details).
-
-        etag:
-          type: string
-          readOnly: true
-          description: Version hash for optimistic locking. (#174, #182)
-          example: "a1b2c3d4e5f6"
-
-        created_at:
-          type: string
-          format: date-time                              # UTC Zeitstempel (#169)
-          readOnly: true
-          description: Creation timestamp in UTC (RFC 3339).
-          example: "2024-01-15T10:30:00Z"
-
-        updated_at:
-          type: string
-          format: date-time                              # _at Suffix (#235)
-          readOnly: true
-          description: Last modification timestamp in UTC (RFC 3339).
-          example: "2024-01-15T14:22:00Z"
-
-        cancelled_at:
-          type: string
-          format: date-time                              # Optional, kein null (#123)
-          readOnly: true
-          description: Cancellation timestamp in UTC. Omitted if not cancelled.
-          example: "2024-01-16T09:00:00Z"
-
-    # Order Request — für POST
-    OrderRequest:
-      type: object
-      required: [customer_id, items, currency_code]
-      properties:
-        external_order_id:
-          type: string
-          maxLength: 100
-          example: "ERP-2024-00847"
-
-        customer_id:
-          type: string
-          example: "cust_789"
-
-        warehouse_id:
-          type: string
-          example: "wh_001"
-
-        currency_code:
-          type: string
-          format: iso-4217
-          pattern: '^[A-Z]{3}$'
-          example: "EUR"
-
-        country_code:
-          type: string
-          format: iso-3166-alpha-2
-          pattern: '^[A-Z]{2}$'
-          example: "DE"
-
-        delivery_date:
-          type: string
-          format: date
-          example: "2024-01-20"
-
-        is_gift_wrapping_requested:
-          type: boolean
-          nullable: false
-
-        items:
-          type: array
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/OrderItemRequest'
-
-        metadata:
-          type: object
-          propertyNames:
-            pattern: '^[a-z][a-z0-9_]{0,39}$'
-          additionalProperties:
-            type: string
-            maxLength: 500
-          maxProperties: 50
-
-    # Order Patch — für PATCH (alle Felder optional)
-    OrderPatch:
-      type: object
-      properties:
-        delivery_date:
-          type: string
-          format: date
-          example: "2024-01-25"
-
-        is_gift_wrapping_requested:
-          type: boolean
-          nullable: false
-
-        warehouse_id:
-          type: string
-          example: "wh_002"
-
-        metadata:
-          type: object
-          propertyNames:
-            pattern: '^[a-z][a-z0-9_]{0,39}$'
-          additionalProperties:
-            type: string
-            maxLength: 500
-          maxProperties: 50
-
-    # Order Item
-    OrderItem:
-      type: object
-      required: [id, product_id, quantity, unit_price, currency_code]
-      properties:
-        id:
-          type: string
-          readOnly: true
-          example: "item_001"
-
-        product_id:
-          type: string                                   # {entity}_id Muster (#174)
-          example: "prod_xyz"
-
-        quantity:
-          type: integer
-          format: int32                                  # Explizites Format (#171)
-          minimum: 1
-          example: 2
-
-        unit_price:
-          type: number
-          format: decimal                                # Decimal für Preise (#171)
-          minimum: 0
-          example: 74.97
-
-        currency_code:
-          type: string
-          format: iso-4217
-          pattern: '^[A-Z]{3}$'
-          example: "EUR"
-
-        sku:
-          type: string
-          maxLength: 50
-          description: Stock Keeping Unit identifier.
-          example: "SKU-WJ-L-BLK"
-
-        created_at:
-          type: string
-          format: date-time
-          readOnly: true
-          example: "2024-01-15T10:30:00Z"
-
-    # Order Item Request
-    OrderItemRequest:
-      type: object
-      required: [product_id, quantity]
-      properties:
-        product_id:
-          type: string
-          example: "prod_xyz"
-
-        quantity:
-          type: integer
-          format: int32
-          minimum: 1
-          example: 2
-
-        sku:
-          type: string
-          maxLength: 50
-          example: "SKU-WJ-L-BLK"
-
-    # Paginiertes Response-Format (#248, #110)
-    OrderPage:
-      type: object                                       # Immer Objekt, nie Array (#110)
-      required: [items, cursor]
-      properties:
-        items:                                           # Array-Name Plural (#120)
-          type: array
-          items:
-            $ref: '#/components/schemas/Order'
-        cursor:
-          $ref: '#/components/schemas/Cursor'
-
-    OrderItemPage:
-      type: object
-      required: [items, cursor]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/OrderItem'
-        cursor:
-          $ref: '#/components/schemas/Cursor'
-
-    # Cursor-Objekt (#160, #248)
-    Cursor:
-      type: object
-      required: [next, prev]
-      properties:
-        next:
-          type: string
-          nullable: true
-          description: Cursor for the next page. null if this is the last page.
-          example: "eyJpZCI6Im9yZF9hYmMxMjMifQ"
-        prev:
-          type: string
-          nullable: true
-          description: Cursor for the previous page. null if this is the first page.
-
-    # Search Request (#237)
-    OrderSearchRequest:
-      type: object
-      properties:
-        filter:
-          type: object
-          properties:
-            status:
-              type: array
-              items:
-                type: string
-                enum: [OPEN, IN_PROGRESS, COMPLETED, CANCELLED]
-            customer_id:
-              type: string
-            total_amount:
-              type: object
-              properties:
-                gte:
-                  type: number
-                  format: decimal
-                lte:
-                  type: number
-                  format: decimal
-            created_at:
-              type: object
-              properties:
-                gte:
-                  type: string
-                  format: date-time
-                lte:
-                  type: string
-                  format: date-time
-        sort:
-          type: array
-          style: form
-          explode: false
-          items:
-            type: string
-          example: ["-created_at", "+status"]
-        limit:
-          type: integer
-          format: int32
-          minimum: 1
-          maximum: 100
-          default: 20
-        cursor:
-          type: string
-          description: Opaque server-internal reference for pagination.
-
-    # Batch Request (#152, #141)
-    OrderBatchRequest:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            type: object
-            required: [id, order]
-            properties:
-              id:
-                type: string
-                description: Client-provided identifier for this batch item.
-                example: "req_1"
-              order:
-                $ref: '#/components/schemas/OrderRequest'
-
-    OrderBatchResponse:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            type: object
-            required: [id, status]
-            properties:
-              id:
-                type: string
-                description: Matches the request item ID.
-                example: "req_1"
-              status:
-                type: integer
-                format: int32
-                description: HTTP status code for this item.
-                example: 201
-              order:
-                $ref: '#/components/schemas/Order'
-              problem:
-                $ref: '#/components/schemas/Problem'
-
-    # Health Status (Infrastruktur)
-    HealthStatus:
-      type: object
-      required: [status]
-      properties:
-        status:
-          type: string
-          enum: [UP, DOWN]
-          example: "UP"
-
-    # Problem JSON (#176, RFC 7807)
-    Problem:
-      type: object
-      required: [type, title, status]
-      properties:
-        type:
-          type: string
-          format: uri
-          description: URI identifying the problem type.
-          example: "https://api.company.com/errors/validation-error"
-        title:
-          type: string
-          description: Short, human-readable summary of the problem type.
-          example: "Validation Error"
-        status:
-          type: integer
-          format: int32
-          description: HTTP status code.
-          example: 422
-        detail:
-          type: string
-          description: Human-readable explanation specific to this occurrence.
-          example: "Field 'quantity' must be greater than 0."
-        instance:
-          type: string
-          format: uri
-          description: URI reference identifying the specific occurrence.
-          example: "/v1/orders/ord_abc123"
-
-    ProblemWithErrors:                                   # Erweiterung für Validierungsfehler
-      allOf:
-        - $ref: '#/components/schemas/Problem'
-        - type: object
-          properties:
-            errors:
-              type: array
-              items:
-                type: object
-                properties:
-                  field:
-                    type: string
-                    example: "quantity"
-                  message:
-                    type: string
-                    example: "Must be greater than 0."
-                  rejected_value:
-                    description: The value that was rejected.
-
-    ProblemWithTraceId:                                  # C-05: trace_id bei 5xx
-      allOf:
-        - $ref: '#/components/schemas/Problem'
-        - type: object
-          properties:
-            trace_id:
-              type: string
-              description: Trace ID extracted from W3C traceparent header.
-              example: "4bf92f3577b34da6a3ce929d0e0e4736"
-
-  # ── Wiederverwendbare Responses (#176 Problem JSON) ─────────
-  responses:
-
-    BadRequest:
-      description: Syntactically invalid request (#400)
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: "https://api.company.com/errors/invalid-json"
-            title: "Bad Request"
-            status: 400
-            detail: "Unexpected token at position 32."
-
-    Unauthorized:
-      description: Missing or invalid authentication token (#401)
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: "https://api.company.com/errors/unauthorized"
-            title: "Unauthorized"
-            status: 401
-
-    Forbidden:
-      description: Insufficient permissions (#403)
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: "https://api.company.com/errors/forbidden"
-            title: "Forbidden"
-            status: 403
-            detail: "The scope 'write:orders' is required for this operation."
-
-    NotFound:
-      description: Resource not found (#404)
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: "https://api.company.com/errors/resource-not-found"
-            title: "Not Found"
-            status: 404
-            detail: "Order 'ord_abc123' does not exist."
-            instance: "/v1/orders/ord_abc123"
-
-    Conflict:
-      description: Optimistic locking conflict or state conflict (#409)
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: "https://api.company.com/errors/optimistic-locking-conflict"
-            title: "Conflict"
-            status: 409
-            detail: "The resource was modified since it was last read. Please fetch the current version and retry."
-
-    UnprocessableEntity:
-      description: Semantically invalid request — validation failed (#422)
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/ProblemWithErrors'
-          example:
-            type: "https://api.company.com/errors/validation-error"
-            title: "Validation Error"
-            status: 422
-            detail: "Multiple validation errors occurred."
-            errors:
-              - field: "quantity"
-                message: "Must be greater than 0."
-                rejected_value: -1
-              - field: "delivery_date"
-                message: "Must be a future date."
-                rejected_value: "2020-01-01"
-
-    TooManyRequests:
-      description: Rate limit exceeded (#153, #429)
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-          description: Seconds to wait before retrying.
-          example: 60
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: "https://api.company.com/errors/rate-limit-exceeded"
-            title: "Too Many Requests"
-            status: 429
-            detail: "Rate limit of 1000 requests per minute exceeded."
-
-    InternalServerError:
-      description: Unexpected server error (#500, C-05)
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/ProblemWithTraceId'
-          example:
-            type: "https://api.company.com/errors/internal-error"
-            title: "Internal Server Error"
-            status: 500
-            trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
-
-# ─────────────────────────────────────────────────────────────
-# Tags (Gruppierung im Developer Portal)
-# ─────────────────────────────────────────────────────────────
-tags:
-  - name: Orders
-    description: Order management operations
-  - name: Order Items
-    description: Order item operations
-  - name: Infrastructure
-    description: Health and readiness checks — no authentication required
-
+# Gravitee API Gateway – Integration Styleguide
+
+**Verbindliche Richtlinien für die Integration von REST-APIs**
+
+| | |
+|---|---|
+| **Deployment-Modell** | Hybrid (Gateway on-premise, Control Plane SaaS) |
+| **API-Typen** | REST/HTTP |
+| **Zielgruppen** | API-Producer-Teams, Platform/Gateway-Admins, Security & Compliance |
+| **Gravitee-Version** | APIM 4.x |
+| **Version** | 1.4 |
 
 ---
 
-# ============================================================
-# Gravitee API Score — Custom Ruleset
-# Basierend auf: api-styleguide-v2.md (Zalando / Adidas / Stripe)
-# Format: Spectral YAML
-# Import: APIM Console → API Score → Rulesets & Functions → Import
-# ============================================================
+## 1  Einleitung
 
-rules:
+Dieser Styleguide legt verbindliche Regeln und Empfehlungen für die Integration von REST-APIs über das Gravitee API Management Gateway fest.
 
-  # ----------------------------------------------------------
-  # 2. META-INFORMATIONEN
-  # ----------------------------------------------------------
+Er **ergänzt den übergeordneten REST API Styleguide** [`<Platzhalter: Link zum REST API Styleguide>`] um Gateway-spezifische Vorgaben. Bei Konflikten gilt:
+- der **REST API Styleguide** für das API-Design selbst (URL-Struktur, Payloads, Statuscodes …)
+- **dieses Dokument** für die Gateway-Konfiguration
 
-  # [218] info.title muss vorhanden und nicht leer sein
-  has-info-title:
-    description: "[218] API muss einen titel im info-Block haben."
-    message: "info.title fehlt oder ist leer."
-    severity: error
-    given: "$.info"
-    then:
-      field: title
-      function: truthy
+### 1.1  Zeichenerklärung
 
-  # [218] info.description muss vorhanden und nicht leer sein
-  has-info-description:
-    description: "[218] API muss eine Beschreibung im info-Block haben."
-    message: "info.description fehlt oder ist leer. Beschreibe Zweck und Anwendungsfälle der API."
-    severity: error
-    given: "$.info"
-    then:
-      field: description
-      function: truthy
+| Symbol | Bedeutung | Konsequenz bei Verstoß |
+|---|---|---|
+| ⚑ **PFLICHT** | Verbindliche Anforderung | API wird nicht deployt / Onboarding blockiert |
+| ✓ **EMPFOHLEN** | Best Practice | Begründung bei Abweichung erforderlich |
+| ℹ **INFO** | Hinweis / Erläuterung | Keine |
 
-  # [218] info.contact muss vorhanden sein
-  has-info-contact:
-    description: "[218] API muss Kontaktinformationen im info-Block enthalten."
-    message: "info.contact fehlt. Bitte Name, E-Mail und URL des verantwortlichen Teams angeben."
-    severity: error
-    given: "$.info"
-    then:
-      field: contact
-      function: truthy
+---
 
-  # [218] info.contact.email muss vorhanden sein
-  has-info-contact-email:
-    description: "[218] Kontakt-E-Mail im info.contact-Block muss angegeben sein."
-    message: "info.contact.email fehlt."
-    severity: error
-    given: "$.info.contact"
-    then:
-      field: email
-      function: truthy
+## 2  Naming & Metadaten
 
-  # [215] x-api-id muss vorhanden sein (UUID)
-  has-x-api-id:
-    description: "[215] Jede API benötigt eine global eindeutige, unveränderliche UUID als x-api-id."
-    message: "info.x-api-id fehlt. Bitte eine UUID eintragen (z.B. d0184f38-b98d-11e7-9c56-68f728c1ba70)."
-    severity: error
-    given: "$.info"
-    then:
-      field: x-api-id
-      function: truthy
+### 2.1  API-Name
 
-  # [219] x-audience muss vorhanden sein
-  has-x-audience:
-    description: "[219] API muss ihre Zielgruppe über x-audience deklarieren."
-    message: "info.x-audience fehlt. Erlaubte Werte: external-public, external-partner, company-internal, business-unit-internal, component-internal."
-    severity: error
-    given: "$.info"
-    then:
-      field: x-audience
-      function: truthy
+⚑ **PFLICHT** – API-Name folgt dem Schema: `<domäne>-<ressource>-v<major>`
 
-  # [219] x-audience muss einen gültigen Wert haben
-  valid-x-audience:
-    description: "[219] x-audience muss einen der erlaubten Werte haben."
-    message: "info.x-audience hat einen ungültigen Wert. Erlaubt: external-public, external-partner, company-internal, business-unit-internal, component-internal."
-    severity: error
-    given: "$.info.x-audience"
-    then:
-      function: enumeration
-      functionOptions:
-        values:
-          - external-public
-          - external-partner
-          - company-internal
-          - business-unit-internal
-          - component-internal
+| Feld | Beispiel | Erlaubt | Nicht erlaubt |
+|---|---|---|---|
+| Domäne | `order` | Kleinbuchstaben, Bindestriche | Leerzeichen, Großbuchstaben |
+| Ressource | `shipments` | Plural-Substantiv | Verben (z. B. `getOrders`) |
+| Version | `v2` | `v` + Integer | `v2.1`, `2`, `V2` |
+| Vollständig | `order-shipments-v2` | – | `Order Shipments`, `orderShipmentsV2` |
 
-  # [116] Semantic Versioning: version muss MAJOR.MINOR.PATCH sein
-  semver-version:
-    description: "[116] API-Version muss Semantic Versioning (MAJOR.MINOR.PATCH) folgen."
-    message: "info.version '{{value}}' entspricht nicht dem Format MAJOR.MINOR.PATCH (z.B. 1.2.3)."
-    severity: error
-    given: "$.info.version"
-    then:
-      function: pattern
-      functionOptions:
-        match: "^\\d+\\.\\d+\\.\\d+$"
+### 2.2  Context-Path
 
-  # [102] externalDocs sollte vorhanden sein (Benutzerhandbuch)
-  has-external-docs:
-    description: "[102] API sollte ein Benutzerhandbuch via externalDocs verlinken."
-    message: "externalDocs fehlt. Verlinke ein Benutzerhandbuch mit Zweck, Beispielen und Fehlerfällen."
-    severity: warn
-    given: "$"
-    then:
-      field: externalDocs
-      function: truthy
+⚑ **PFLICHT** – Context-Path enthält die Hauptversion: `/<domäne>/<ressource>/v<major>`
 
-  # ----------------------------------------------------------
-  # 3. SICHERHEIT
-  # ----------------------------------------------------------
+```
+/order/shipments/v2
+```
 
-  # [104] Globales Security-Schema muss definiert sein
-  has-security-schemes:
-    description: "[104] API muss ein Security-Schema (OAuth2/JWT) in components.securitySchemes definieren."
-    message: "components.securitySchemes fehlt. Alle Endpunkte müssen abgesichert sein."
-    severity: error
-    given: "$.components"
-    then:
-      field: securitySchemes
-      function: truthy
+✓ **EMPFOHLEN** – Kein trailing slash; nur Kleinbuchstaben und Bindestriche.
 
-  # [105] Jede Operation muss ein security-Feld haben
-  operations-have-security:
-    description: "[104/105] Jede Operation muss ein security-Feld definieren (oder explizit [] für bewusste Ausnahmen wie /health)."
-    message: "Operation '{{path}}' hat kein security-Feld. Entweder OAuth2-Scopes oder explizit security: [] für Ausnahmen (Health, OpenAPI-Endpunkt)."
-    severity: error
-    given: "$.paths[*][get,post,put,patch,delete,head,options]"
-    then:
-      field: security
-      function: defined
+ℹ Detailregeln zu URL-Design (Pluralform, Query-Parameter, Filter etc.) sind im REST API Styleguide geregelt [`<Link zum REST API Styleguide>`].
 
-  # [C-06] Scope-Namen müssen dem Format read|write|admin:<ressource> folgen
-  valid-scope-format:
-    description: "[C-06] Scope-Namen müssen dem Format read:<ressource>, write:<ressource> oder admin:<ressource> folgen."
-    message: "Scope '{{value}}' entspricht nicht dem Schema {aktion}:{ressource} (erlaubte Aktionen: read, write, admin)."
-    severity: error
-    given: "$.components.securitySchemes[*].flows[*].scopes"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: object
-          additionalProperties:
-            type: string
-          patternProperties:
-            "^(read|write|admin):[a-z][a-z0-9-]*$":
-              type: string
+### 2.3  Beschreibung & Dokumentation
 
-  # ----------------------------------------------------------
-  # 5. URLs / PFADE
-  # ----------------------------------------------------------
+- ⚑ **PFLICHT** – Beschreibung in der APIM-Konsole hinterlegt (min. 2 Sätze).
+- ⚑ **PFLICHT** – OpenAPI-Spezifikation (OAS 3.x) als Dokumentation importiert oder verlinkt.
+- ✓ **EMPFOHLEN** – Kontaktinformationen des verantwortlichen Teams (E-Mail oder Slack-Channel).
 
-  # [C-01] Alle Pfade müssen mit /v{n}/ beginnen
-  path-has-version-prefix:
-    description: "[C-01] Jeder API-Pfad muss die Major-Version im Pfad enthalten (/v1/, /v2/, ...)."
-    message: "Pfad '{{path}}' beginnt nicht mit einer Versionsnummer (/v1/, /v2/, ...). Ausnahmen: /health, /ready, /live, /startup, /openapi.yaml, /metrics."
-    severity: error
-    given: "$.paths"
-    then:
-      function: pattern
-      functionOptions:
-        match: "^(/v\\d+/|/health|/ready|/live|/startup|/openapi\\.yaml|/openapi\\.json|/docs|/metrics)"
+### 2.4  Labels & Tags
 
-  # [129] Pfadsegmente müssen kebab-case sein
-  path-kebab-case:
-    description: "[129] Pfadsegmente müssen in kebab-case sein (nur Kleinbuchstaben und Bindestriche)."
-    message: "Pfad '{{path}}' enthält Segmente die nicht kebab-case sind. Keine camelCase oder snake_case."
-    severity: error
-    given: "$.paths"
-    then:
-      function: pattern
-      functionOptions:
-        match: "^(/v\\d+)?(/[a-z0-9][a-z0-9-]*|/\\{[a-zA-Z0-9_-]+\\})*(/search|/batch|/export)?(/[a-z0-9][a-z0-9-]*|/\\{[a-zA-Z0-9_-]+\\})*$"
+⚑ **PFLICHT** – Folgende Labels sind für jede API verpflichtend:
 
-  # [136] Keine Trailing Slashes in Pfaden
-  no-trailing-slash:
-    description: "[136] Pfade dürfen keinen abschliessenden Slash haben."
-    message: "Pfad '{{path}}' endet mit einem Slash. Trailing Slashes sind verboten."
-    severity: error
-    given: "$.paths"
-    then:
-      function: pattern
-      functionOptions:
-        notMatch: "/$"
+| Label-Key | Beispielwert | Pflicht | Zweck |
+|---|---|---|---|
+| `team` | `checkout-squad` | Ja | Zuordnung Producer-Team |
+| `domain` | `order` | Ja | Fachliche Domäne |
+| `sla-tier` | `bronze` / `silver` / `gold` | Ja | SLA-Klasse (siehe Kap. 4) |
+| `environment` | `dev` / `staging` / `prod` | Ja | Deployment-Stage |
+| `data-classification` | `internal` / `confidential` / `public` | Ja | Datenschutz |
+| `lifecycle` | `active` / `deprecated` / `sunset` | Nein | Lifecycle-Status |
 
-  # [130] Query-Parameter müssen snake_case sein
-  query-param-snake-case:
-    description: "[130] Query-Parameter müssen snake_case verwenden (keine camelCase oder kebab-case)."
-    message: "Query-Parameter '{{value}}' ist nicht snake_case."
-    severity: error
-    given: "$.paths[*][*].parameters[?(@.in=='query')].name"
-    then:
-      function: pattern
-      functionOptions:
-        match: "^[a-z][a-z0-9_]*$"
+---
 
-  # ----------------------------------------------------------
-  # 6. JSON PAYLOAD / SCHEMA
-  # ----------------------------------------------------------
+## 3  Sicherheit & Authentifizierung
 
-  # [118] Property-Namen müssen snake_case sein (kein camelCase)
-  property-names-snake-case:
-    description: "[118] JSON Property-Namen müssen snake_case verwenden — niemals camelCase."
-    message: "Property '{{path}}' ist nicht snake_case. Beispiel: order_id statt orderId."
-    severity: error
-    given: "$.components.schemas[*].properties"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: object
-          patternProperties:
-            "^[a-z][a-z0-9_]*$":
-              type: object
-          additionalProperties: false
+### 3.1  Plans und Authentifizierung
 
-  # [C-02] Kein HATEOAS — keine _links, href, self Properties
-  no-hateoas:
-    description: "[C-02] Kein HATEOAS erlaubt. Keine _links, href oder self Properties in Schemas."
-    message: "Property '{{path}}' deutet auf HATEOAS hin (_links, href, self). HATEOAS ist gemäss Styleguide nicht erlaubt."
-    severity: error
-    given: "$.components.schemas[*].properties"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: object
-          not:
-            anyOf:
-              - required: ["_links"]
-              - required: ["href"]
-              - required: ["self"]
+- ⚑ **PFLICHT** – Jede API muss mindestens einen Plan mit Authentifizierung besitzen.
+- ⚑ **PFLICHT** – Keyless-Plans sind in Produktionsumgebungen verboten.
 
-  # [235] Datum/Zeit Properties sollten _at-Suffix haben
-  datetime-property-at-suffix:
-    description: "[235] Properties vom Typ date-time sollten den Suffix _at haben (z.B. created_at, updated_at)."
-    message: "Property '{{path}}' ist vom Typ date-time aber hat keinen _at-Suffix."
-    severity: warn
-    given: "$.components.schemas[*].properties[*][?(@.format=='date-time')]~"
-    then:
-      function: pattern
-      functionOptions:
-        match: "_at$"
+| Methode | Einsatzgebiet | Bewertung |
+|---|---|---|
+| OAuth2 / JWT | Standard für externe & interne APIs | **Bevorzugt** |
+| API Key | Einfache M2M-Szenarien | Akzeptiert |
+| mTLS | Hochsicherheits-Integrationen | Akzeptiert |
+| Keyless | Nur Dev-Sandbox mit expliziter Freigabe | Ausnahme |
 
-  # [171] Integer-Properties müssen ein format angeben
-  integer-must-have-format:
-    description: "[171] Integer-Properties müssen ein explizites Format angeben (int32, int64, bigint)."
-    message: "Integer-Property '{{path}}' hat kein format. Bitte int32, int64 oder bigint angeben."
-    severity: error
-    given: "$.components.schemas[*].properties[?(@.type=='integer')]"
-    then:
-      field: format
-      function: truthy
+### 3.2  JWT-Konfiguration
 
-  # [171] Number-Properties müssen ein format angeben
-  number-must-have-format:
-    description: "[171] Number-Properties müssen ein explizites Format angeben (float, double, decimal)."
-    message: "Number-Property '{{path}}' hat kein format. Bitte float, double oder decimal angeben."
-    severity: error
-    given: "$.components.schemas[*].properties[?(@.type=='number')]"
-    then:
-      field: format
-      function: truthy
+- ⚑ **PFLICHT** – Signature-Algorithmus: `RS256` oder `ES256` (kein `HS256` in Produktion).
+- ⚑ **PFLICHT** – Token-Expiry prüfen (`exp`-Claim).
+- ⚑ **PFLICHT** – Issuer (`iss`) und Audience (`aud`) müssen validiert werden.
+- ✓ **EMPFOHLEN** – JWKS-Endpoint statt statischem Public Key.
 
-  # ----------------------------------------------------------
-  # 7. HTTP-ANFRAGEN / OPERATIONEN
-  # ----------------------------------------------------------
+### 3.3  OAuth2-Konfiguration
 
-  # [151] Jede Operation muss mindestens einen Response-Code definieren
-  operations-have-responses:
-    description: "[151] Jede Operation muss Response-Codes definieren."
-    message: "Operation '{{path}}' hat keine Responses definiert."
-    severity: error
-    given: "$.paths[*][get,post,put,patch,delete,head,options]"
-    then:
-      field: responses
-      function: truthy
+- ⚑ **PFLICHT** – Token Introspection Endpoint über HTTPS.
+- ⚑ **PFLICHT** – Scopes auf Plan-Ebene dokumentiert.
+- ✓ **EMPFOHLEN** – Access Token Cache aktivieren (Cache TTL < Token Expiry).
 
-  # [151] Jede Operation muss einen operationId haben
-  operations-have-operation-id:
-    description: "Jede Operation sollte eine eindeutige operationId haben (für Client-Generierung und Dokumentation)."
-    message: "Operation '{{path}}' hat keine operationId."
-    severity: warn
-    given: "$.paths[*][get,post,put,patch,delete,head,options]"
-    then:
-      field: operationId
-      function: truthy
+### 3.4  Subscription-Prozess
 
-  # [151] Jede Operation muss eine summary haben
-  operations-have-summary:
-    description: "[151] Jede Operation muss eine summary haben."
-    message: "Operation '{{path}}' hat keine summary."
-    severity: warn
-    given: "$.paths[*][get,post,put,patch,delete,head,options]"
-    then:
-      field: summary
-      function: truthy
+- ⚑ **PFLICHT** – Auto-Validierung von Subscriptions deaktivieren; manuelle Prüfung durch API-Owner.
+- ⚑ **PFLICHT** – Subscription-Kommentar als Pflichtfeld aktivieren (Begründung des Konsumenten).
+- ✓ **EMPFOHLEN** – Subscriptions mindestens quartalsweise reviewen und verwaiste Subscriptions widerrufen.
+- ✓ **EMPFOHLEN** – Benachrichtigungen für neue Subscription-Anfragen an das Producer-Team konfigurieren.
 
-  # [176] Fehler-Responses müssen application/problem+json verwenden (RFC 7807)
-  error-responses-problem-json:
-    description: "[176] Fehler-Responses (4xx, 5xx) müssen application/problem+json als Content-Type verwenden (RFC 7807)."
-    message: "Fehler-Response '{{path}}' verwendet nicht application/problem+json. Problem JSON nach RFC 7807 ist Pflicht."
-    severity: error
-    given: "$.paths[*][*].responses[?(@property >= '400')].content"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: object
-          required:
-            - "application/problem+json"
+### 3.5  CORS
 
-  # [153] 429-Response muss definiert sein wenn Rate Limiting aktiv ist
-  has-429-response:
-    description: "[153] Wenn Rate Limiting aktiv ist, muss eine 429-Response mit Retry-After definiert sein."
-    message: "Operation '{{path}}' hat keine 429-Response. Bei Rate Limiting muss 429 Too Many Requests mit Retry-After definiert sein."
-    severity: warn
-    given: "$.paths[*][get,post,put,patch,delete].responses"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: object
-          required:
-            - "429"
+- ⚑ **PFLICHT** – CORS auf API-Ebene konfigurieren; **niemals** Wildcard (`*`) in Produktionsumgebungen.
+- ⚑ **PFLICHT** – Erlaubte Origins explizit whitelist-basiert pflegen.
+- ✓ **EMPFOHLEN** – Allowed Methods auf das notwendige Minimum beschränken.
 
-  # ----------------------------------------------------------
-  # 8. HTTP-STATUSCODES
-  # ----------------------------------------------------------
+```
+Access-Control-Allow-Origin: https://app.example.com
+```
 
-  # [152] POST auf Collections muss 201 zurückgeben
-  post-collection-returns-201:
-    description: "[152] POST auf Collection-Endpunkte (ohne ID-Segment) muss 201 Created zurückgeben."
-    message: "POST '{{path}}' sollte 201 Created zurückgeben wenn eine Ressource erstellt wird."
-    severity: warn
-    given: "$.paths[?(!@property.match(/\\{[^}]+\\}$/))].post.responses"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: object
-          required:
-            - "201"
+### 3.6  TLS
 
-  # [243] Kein 200 für DELETE
-  delete-no-200:
-    description: "[243] DELETE sollte 204 No Content zurückgeben, nicht 200 OK."
-    message: "DELETE '{{path}}' verwendet 200 als Response. DELETE sollte 204 No Content zurückgeben."
-    severity: warn
-    given: "$.paths[*].delete.responses"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: object
-          not:
-            required:
-              - "200"
+- ⚑ **PFLICHT** – Alle Backend-Verbindungen (Endpoint) über HTTPS/TLS 1.2+.
+- ⚑ **PFLICHT** – Self-signed Certificates nur in Dev/Staging; in Produktion nur CA-signierte Zertifikate.
+- ✓ **EMPFOHLEN** – `trustAll=false` in der Gateway-Konfiguration belassen (Standard seit Gravitee 4.4).
 
-  # ----------------------------------------------------------
-  # 11. PAGINIERUNG
-  # ----------------------------------------------------------
+---
 
-  # [159] GET auf Collection-Endpunkte sollten Paginierung unterstützen
-  collection-get-has-pagination-params:
-    description: "[159] GET auf Collections sollte Paginierung via limit/offset oder cursor unterstützen."
-    message: "GET '{{path}}' ist ein Collection-Endpunkt ohne Paginierungs-Parameter (limit, offset, cursor, page_token)."
-    severity: warn
-    given: "$.paths[?(!@property.match(/\\{[^}]+\\}$/))].get.parameters"
-    then:
-      function: schema
-      functionOptions:
-        schema:
-          type: array
-          contains:
-            type: object
-            properties:
-              name:
-                type: string
-                enum: [limit, offset, cursor, page_token, after, before]
-            required:
-              - name
+## 4  SLA-Tiers & Service Levels
 
-  # ----------------------------------------------------------
-  # 13. DEPRECATION
-  # ----------------------------------------------------------
+Service Level Agreements (SLAs) definieren Zusagen über Verfügbarkeit, Latenz, Durchsatz und Support einer API. Sie sind die Grundlage für Rate Limiting (Kap. 5.1), Monitoring-Alerts (Kap. 6.4), Eskalationsketten und Wartungsplanung.
 
-  # [187] Deprecated Operations sollten x-sunset oder sunset info haben
-  deprecated-has-sunset-info:
-    description: "[187] Deprecated Operationen sollten Sunset-Informationen (x-sunset) enthalten."
-    message: "Operation '{{path}}' ist als deprecated markiert, hat aber keine x-sunset Information."
-    severity: warn
-    given: "$.paths[*][?(@.deprecated==true)]"
-    then:
-      field: x-sunset
-      function: truthy
+Jede API wird über das Label `sla-tier` (siehe Kap. 2.4) genau einem Tier zugeordnet: **Bronze**, **Silver** oder **Gold**.
+
+ℹ Die Werte gelten für den **Gateway-Layer**. Backend-Services können zusätzlich eigene SLAs definieren – das End-to-End-SLA ist nur so gut wie das schwächste Glied.
+
+### 4.1  SLA-Tier-Matrix
+
+| Dimension | Bronze | Silver | Gold |
+|---|---|---|---|
+| **Verfügbarkeit** | 99,0 % | 99,5 % | 99,9 % |
+| **Maximale Downtime/Jahr** | ~ 87,6 h | ~ 43,8 h | ~ 8,76 h |
+| **P95-Latenz (Gateway-Overhead)** | < 1.000 ms | < 500 ms | < 200 ms |
+| **Rate Limit (Burst)** | 10 req/s | 50 req/s | 200 req/s |
+| **Quota (Langzeit)** | 10.000 req/Tag | 100.000 req/Tag | Fair Use |
+| **Error Budget** | 1,0 % | 0,5 % | 0,1 % |
+| **Support-Reaktion P1** | 4 h (Werktage) | 1 h (24/7) | 15 min (24/7) |
+| **Support-Reaktion P2** | 1 Werktag | 4 h | 1 h |
+| **Wartungsfenster** | beliebig | werktags 22:00 – 06:00 | nur Sa/So 02:00 – 06:00 |
+| **Deprecation-Frist** | siehe REST API Styleguide [`<Link>`] | siehe REST API Styleguide [`<Link>`] | siehe REST API Styleguide [`<Link>`] |
+
+### 4.2  Wartungsfenster
+
+#### Braucht Gravitee Downtime?
+
+**Nein – bei korrekter HA-Konfiguration nicht.** Gravitee unterstützt Rolling Updates, Blue/Green- und Canary-Deployments. Ein produktiver Gateway-Cluster mit mindestens 2 Nodes hinter einem Load Balancer kann ohne Service-Unterbrechung aktualisiert werden.
+
+Wartungsfenster sind dennoch erforderlich, weil das Gesamtsystem mehr umfasst als nur den Gateway:
+
+| Szenario | Warum Wartungsfenster? |
+|---|---|
+| Backend-Service-Wartung | Restarts, Schema-Migrationen, Breaking Deployments der eigentlichen API |
+| Gravitee Major-Upgrade | Konfigurationsmigration, Plugin-Updates, ggf. Repository-Migration |
+| Datenbank-Wartung | Elasticsearch/OpenSearch Upgrades, Index-Rebuilds, MongoDB-Wartung |
+| Infrastruktur-Arbeiten | Netzwerk, Load Balancer, Zertifikat-Rotation, Firewall-Regeln |
+| Breaking-Config-Changes | Konfigurationsänderungen, die einen Gateway-Restart erfordern |
+
+#### Warum sind die Fenster für höhere Tiers enger?
+
+Höhere Verfügbarkeitszusagen lassen weniger Spielraum für Wartung:
+
+- **Gold (99,9 %)**: max. ~ 8,76 h Downtime/Jahr → Wartung nur in Nebenzeiten (Wochenende, Nacht), um Konsumenten-Impact zu minimieren
+- **Silver (99,5 %)**: max. ~ 43,8 h/Jahr → werktags abends/nachts vertretbar
+- **Bronze (99,0 %)**: max. ~ 87,6 h/Jahr → flexibles Fenster, auch geschäftszeiten-nah
+
+#### Pflichten beim Wartungsfenster
+
+- ⚑ **PFLICHT** – Wartungsfenster mindestens **5 Werktage** vorher ankündigen (E-Mail an alle Subscriber + Status-Page-Eintrag).
+- ⚑ **PFLICHT** – Bei Notfall-Wartung: Ankündigung sobald möglich, Post-Mortem binnen 5 Werktagen.
+- ✓ **EMPFOHLEN** – Auch bei Zero-Downtime-Deployments einen Status-Page-Eintrag setzen („Wartung läuft, keine Beeinträchtigung erwartet").
+- ✓ **EMPFOHLEN** – Bei Gold-APIs: Maintenance-Mode-Plan vorbereiten (Read-only-Fallback, Cache-only-Modus).
+
+### 4.3  Support & Eskalation
+
+- ⚑ **PFLICHT** – Jedes Producer-Team benennt einen primären und einen Stellvertreter-Ansprechpartner pro API.
+- ⚑ **PFLICHT** – Für Silver- und Gold-APIs: 24/7-Erreichbarkeit per On-Call-Rotation.
+- ⚑ **PFLICHT** – Incident-Klassifizierung nach P1/P2/P3 (Definition im Anhang 10.4).
+- ✓ **EMPFOHLEN** – Gravitee Alert Engine (Kap. 6.5) als primärer Trigger für Eskalation nutzen.
+
+---
+
+## 5  Traffic Management & Policies
+
+### 5.1  Rate Limiting & Quota
+
+- ⚑ **PFLICHT** – Jede API muss mindestens eine Rate-Limit-Policy pro Plan besitzen.
+- ⚑ **PFLICHT** – Quota (langfristiges Limit) und Rate Limit (kurzfristiger Burst-Schutz) **getrennt** konfigurieren.
+- ⚑ **PFLICHT** – Werte gemäß SLA-Tier (siehe Kap. 4.1) setzen; Abweichungen erfordern Genehmigung des Platform-Teams.
+- ✓ **EMPFOHLEN** – Spike Arrest zusätzlich zum Rate Limit.
+- ✓ **EMPFOHLEN** – Redis als Rate-Limit-Store (synchrone Zähler über Gateway-Nodes).
+
+### 5.2  Timeout-Konfiguration
+
+- ⚑ **PFLICHT** – Connect Timeout: max. **5 Sekunden**.
+- ⚑ **PFLICHT** – Read Timeout: max. **30 Sekunden** (Default); Long-Polling-APIs explizit dokumentieren und genehmigen lassen.
+- ✓ **EMPFOHLEN** – Backend-Timeout kürzer als Gateway-Timeout setzen.
+
+### 5.3  Health Check (Kubernetes-Kontext)
+
+Die meisten Backend-Services laufen in einem **Kubernetes-Cluster**. Dadurch entsteht eine **Zwei-Ebenen-Health-Architektur**:
+
+| Ebene | Wer prüft? | Was wird geprüft? | Reaktion |
+|---|---|---|---|
+| **Pod-Ebene** | Kubernetes (`livenessProbe` / `readinessProbe`) | Einzelner Pod gesund? | Ungesunde Pods aus dem K8s-Service entfernen, ggf. neu starten |
+| **API-/Endpoint-Ebene** | Gravitee Health Check | K8s-Service erreichbar und funktional? | Endpoint im Gateway als unhealthy markieren, Alerts auslösen, Analytics aktualisieren |
+
+Beide Ebenen sind **komplementär**, nicht redundant: K8s reagiert granular auf Pod-Ebene, Gravitee aggregiert auf API-Ebene für Monitoring, Alerts und Developer-Portal-Status.
+
+#### Pflichten
+
+- ⚑ **PFLICHT** – Gravitee Health Check pro API aktivieren. Ziel ist der **K8s-Service** (Cluster-IP / Service-Name), nicht einzelne Pods.
+- ⚑ **PFLICHT** – Gravitee Health Check **nicht aggressiver** konfigurieren als die K8s Readiness Probe. Andernfalls markiert Gravitee Endpoints als unhealthy, bevor Kubernetes den Pod austauschen kann (Race Condition, unnötige Alarme).
+- ✓ **EMPFOHLEN** – **Identischer `/health`-Endpoint** für K8s und Gravitee (Single Source of Truth).
+- ✓ **EMPFOHLEN** – Intervalle abstimmen:
+
+| Probe | Intervall | Timeout | Threshold |
+|---|---|---|---|
+| K8s Readiness Probe | 5 – 10 s | 1 – 3 s | failure: 3 |
+| K8s Liveness Probe | 10 – 30 s | 1 – 5 s | failure: 3 |
+| **Gravitee Health Check** | **30 s** | **5 s** | **healthy: 2 / unhealthy: 3** |
+
+#### Hinweis: Gravitee Gateway selbst in Kubernetes
+
+Wenn das Gravitee Gateway selbst in Kubernetes läuft (via Helm Chart oder Gravitee Kubernetes Operator GKO), übernehmen die K8s-Probes die Verwaltung des Gateway-Pods. Es ist **kein zusätzlicher Health Check für das Gateway** zu konfigurieren – die Gravitee-Health-Check-Policy aus diesem Kapitel betrifft ausschließlich die **Backend-Endpoints**, die das Gateway proxiet.
+
+### 5.4  Request-Validation & Transformation
+
+- ✓ **EMPFOHLEN** – OAS Validation Policy aktivieren.
+- ✓ **EMPFOHLEN** – Interne Infrastruktur-Header vor Weiterleitung entfernen.
+- ⚑ **PFLICHT** – Keine sensitiven Daten (Passwörter, Tokens) in Query-Parametern.
+
+### 5.5  Caching
+
+- ✓ **EMPFOHLEN** – Cache-Policy nur für GET-Endpunkte mit deterministischen Antworten.
+- ✓ **EMPFOHLEN** – Cache-TTL an `Cache-Control`-Header des Backends anpassen.
+- ⚑ **PFLICHT** – Caching **niemals** für Endpunkte mit personenbezogenen Daten.
+
+---
+
+## 6  Logging, Monitoring & Observability
+
+### 6.1  Request-/Response-Logging
+
+- ⚑ **PFLICHT** – Full Request/Response Logging in Produktion **deaktivieren** (Performance & Datenschutz).
+- ⚑ **PFLICHT** – Für Debugging nur temporär und ausschließlich für definierte Test-Subscriptions aktivieren.
+
+### 6.2  Distributed Tracing (OpenTelemetry / W3C Trace Context)
+
+Verteiltes Tracing erfolgt nach dem [W3C Trace Context Standard](https://www.w3.org/TR/trace-context/), kompatibel mit OpenTelemetry. Damit ist End-to-End-Tracing über den Gateway und alle nachgelagerten Backend-Services hinweg möglich.
+
+- ⚑ **PFLICHT** – Die W3C Trace Context Header müssen vom Gateway transparent an das Backend weitergereicht werden.
+- ⚑ **PFLICHT** – Falls kein `traceparent`-Header im eingehenden Request vorhanden ist, generiert der Gateway einen neuen (per Policy oder OpenTelemetry-Plugin).
+
+| Header | Standard | Zweck |
+|---|---|---|
+| `traceparent` | W3C Trace Context | Trace-ID, Span-ID, Sampling-Flag (Pflicht-Header) |
+| `tracestate` | W3C Trace Context | Vendor-spezifischer Tracing-Kontext (optional) |
+| `baggage` | W3C Baggage | Anwendungs-Kontext (optional, OpenTelemetry) |
+
+Beispiel:
+
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+```
+
+- ⚑ **PFLICHT** – Logging und Metriken am Gateway müssen Trace-ID und Span-ID aus dem `traceparent`-Header extrahieren und in alle Log-Einträge übernehmen.
+- ✓ **EMPFOHLEN** – OpenTelemetry-Exporter im Gateway konfigurieren (OTLP-Endpoint auf zentralen Collector, z. B. Tempo, Jaeger, Datadog APM).
+
+### 6.3  Gravitee-eigene Tracing-Header
+
+Gravitee setzt zusätzlich eigene Tracing-Header. Diese sind **komplementär** zum W3C-Standard, **kein Ersatz**:
+
+| Header | Bedeutung |
+|---|---|
+| `X-Gravitee-Transaction-Id` | Gateway-interne Transaktions-ID (mehrere Requests einer Transaktion) |
+| `X-Gravitee-Request-Id` | Gateway-interne Request-ID (einzelner Request) |
+
+- ✓ **EMPFOHLEN** – Gravitee-Header in den Gateway-Logs belassen; für Backend-Tracing wird ausschließlich `traceparent`/`tracestate` verwendet.
+- ✓ **EMPFOHLEN** – Bei Bedarf können die Gravitee-Header per Header-Transformation-Policy entfernt werden, bevor der Request das Backend erreicht.
+
+### 6.4  Analytics & Dashboards
+
+- ⚑ **PFLICHT** – Analytics aktiviert lassen (Elasticsearch/OpenSearch).
+- ✓ **EMPFOHLEN** – Pro SLA-Tier ein dediziertes Grafana/Kibana-Dashboard.
+- ✓ **EMPFOHLEN** – Trace-ID als Drilldown-Link zwischen Logs/Metrics/Traces nutzen (z. B. Grafana Tempo Integration).
+- ✓ **EMPFOHLEN** – Alerts für folgende Schwellwerte (am SLA-Tier orientiert, siehe Kap. 4.1):
+  - Error Rate > Error Budget × 5 über 5 Minuten → Warning
+  - Error Rate > Error Budget × 10 über 5 Minuten → Critical
+  - P95-Latenz > Tier-Latenz-Ziel über 10 Minuten → Warning
+  - Rate Limit Quota > 80 % ausgeschöpft → Warning
+
+### 6.5  Gravitee Alert Engine
+
+- ✓ **EMPFOHLEN** – Gravitee Alert Engine für proaktive Benachrichtigungen.
+- ✓ **EMPFOHLEN** – Benachrichtigungen an Slack-Channel des Producer-Teams.
+- ✓ **EMPFOHLEN** – SLA-Tier-basierte Eskalationsketten definieren (P1/P2/P3 → siehe Kap. 4.3).
+
+---
+
+## 7  Deployment & Lifecycle
+
+### 7.1  Deployment-Prozess für API-Definitionen
+
+- ⚑ **PFLICHT** – APIs dürfen **nicht manuell** über die APIM-Console in Produktion deployt werden – ausschließlich über die Azure-Pipelines-CI/CD.
+- ⚑ **PFLICHT** – **Azure Pipelines** ist die verbindliche CI/CD-Plattform; andere CI-Systeme sind nicht zugelassen.
+- ⚑ **PFLICHT** – API-Definitionen (JSON/YAML) müssen in einem Git-Repository (Azure Repos oder mit Azure DevOps verbundenes Git) versioniert sein (Single Source of Truth).
+
+Zugelassene Verfahren:
+
+| Verfahren | Einsatzgebiet | Bewertung |
+|---|---|---|
+| **Gravitee Management API via Azure Pipelines** | Pipeline ruft REST-Endpoints des Management API aus `azure-pipelines.yml` auf | **Standard** |
+| **Gravitee Kubernetes Operator (GKO)** | GitOps mit Custom Resources (CRDs); Sync via Argo CD oder Flux | **Bevorzugt bei Kubernetes-Workloads** |
+| Terraform-Provider | Für einzelne API-Definitionen **nicht zugelassen** (Community-Provider mit eingeschränkter Coverage) | Nicht empfohlen |
+
+- ⚑ **PFLICHT** – Pull-Request-Workflow: jede Änderung durchläuft einen Code-Review (mindestens 1 Approver aus dem Platform-Team für Prod-Deployments).
+- ✓ **EMPFOHLEN** – JSON-Schema-Validierung der API-Definition in der Pipeline.
+
+### 7.2  Azure Pipelines – Struktur & Konventionen
+
+Azure Pipelines ist die verbindliche CI/CD-Plattform für API-Deployments in Gravitee. Pro API-Definition existiert eine `azure-pipelines.yml` im jeweiligen Git-Repository.
+
+#### Pflichten
+
+- ⚑ **PFLICHT** – Pipeline-Definition als **Multi-Stage YAML** (`azure-pipelines.yml`) im API-Repository. Build- und Deployment-Stages liegen in derselben YAML-Datei. Classic Build/Release Pipelines sowie hybride Setups (YAML-Build + Classic-Release) sind nicht zugelassen.
+- ⚑ **PFLICHT** – Pipeline durchläuft folgende Stages in dieser Reihenfolge:
+
+| Stage | Zweck | Approval |
+|---|---|---|
+| `validate` | JSON-Schema-Validierung, Lint, OAS-Check | – |
+| `deploy_dev` | Deployment ins Dev-Environment via Management API | – |
+| `test_dev` | Smoke- und Integrationstests gegen Dev | – |
+| `deploy_staging` | Deployment ins Staging-Environment | Auto nach grünem Test |
+| `test_staging` | Vollständige QA, Quality-Score-Check | – |
+| `deploy_prod` | Deployment in Produktion | **Manuelles Approval (Platform-Team)** |
+
+- ⚑ **PFLICHT** – Pro Stage ein eigenes Azure DevOps **Environment** (`gravitee-dev`, `gravitee-staging`, `gravitee-prod`). Prod-Environment mit Approval-Gate konfiguriert.
+- ⚑ **PFLICHT** – Authentifizierung gegen die Gravitee Management API via **Azure DevOps Service Connection** (Generic / OAuth2); kein hartkodierter Token in der Pipeline.
+- ⚑ **PFLICHT** – Secrets (API-Tokens, Credentials) ausschließlich über **Azure Key Vault** + Variable Group; keine Secrets in YAML oder Repo-Variablen.
+- ⚑ **PFLICHT** – Jeder Pipeline-Run muss die **Trace-ID** des Deployments in den Gravitee-Audit-Log schreiben (Build-ID als Tag an die API-Definition).
+
+#### Empfehlungen
+
+- ✓ **EMPFOHLEN** – Wiederverwendbare **Pipeline-Templates** aus dem zentralen Templates-Repo des Platform-Teams nutzen (siehe Anhang 10.2).
+- ✓ **EMPFOHLEN** – **Branch Policies** in Azure Repos: PR-Validierung (`validate` + `deploy_dev`) muss vor Merge in `main` grün sein.
+- ✓ **EMPFOHLEN** – Pipeline-Caching für npm/Maven-Abhängigkeiten zur Schema-Validierung aktivieren.
+- ✓ **EMPFOHLEN** – Bei GKO-basiertem Deployment: Azure Pipeline pusht die CRDs ins Git-Repo, Argo CD/Flux übernehmen den Sync (GitOps-Pattern).
+
+#### Beispielstruktur `azure-pipelines.yml`
+
+```yaml
+trigger:
+  branches:
+    include: [ main, release/* ]
+
+variables:
+  - group: gravitee-secrets   # via Azure Key Vault
+
+stages:
+  - stage: validate
+    jobs:
+      - job: lint_and_schema
+        steps:
+          - script: npm ci && npm run validate:api
+
+  - stage: deploy_dev
+    dependsOn: validate
+    jobs:
+      - deployment: deploy
+        environment: gravitee-dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: templates/gravitee-deploy.yml@platform-templates
+
+  - stage: deploy_prod
+    dependsOn: test_staging
+    jobs:
+      - deployment: deploy
+        environment: gravitee-prod   # Approval-Gate konfiguriert
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: templates/gravitee-deploy.yml@platform-templates
+```
+
+#### Repo-Layout
+
+Jede API hat ein eigenes Git-Repository in Azure Repos. Verbindliches Grundlayout:
+
+```
+order-shipments-v2/
+├── README.md                       # Zweck, Owner, Slack-Channel, On-Call
+├── CODEOWNERS                      # Pflicht-Reviewer pro Pfad
+├── azure-pipelines.yml             # Multi-Stage Pipeline (validate → dev → staging → prod)
+├── api/
+│   ├── api-definition.json         # Gravitee API-Definition (v4)
+│   ├── openapi.yaml                # OpenAPI 3.x Spezifikation
+│   └── plans/                      # Plan-Konfigurationen (JWT, API-Key, ...)
+├── environments/
+│   ├── dev.vars.yml                # Endpoint-URLs, Tier, Rate Limits pro Env
+│   ├── staging.vars.yml            # KEINE Secrets - die kommen aus Azure Key Vault
+│   └── prod.vars.yml
+├── tests/
+│   ├── smoke/                      # Newman / Postman Collection für Smoke-Tests
+│   └── integration/                # Vollständige Integrationstests (z.B. k6, REST Assured)
+├── docs/
+│   ├── changelog.md                # API-Changelog (siehe REST API Styleguide)
+│   └── runbook.md                  # Operatives Runbook für On-Call
+└── .gitignore
+```
+
+| Element | Pflicht | Zweck |
+|---|---|---|
+| `README.md` | ⚑ | Owner, Kontakt, Slack-Channel, On-Call-Verweis |
+| `CODEOWNERS` | ⚑ | Automatische Reviewer-Zuweisung in PRs (Azure Repos) |
+| `azure-pipelines.yml` | ⚑ | Multi-Stage Pipeline (siehe oben) |
+| `api/api-definition.json` | ⚑ | Gravitee-API-Definition als Single Source of Truth |
+| `api/openapi.yaml` | ⚑ | OpenAPI 3.x (referenziert in Gravitee als Dokumentation) |
+| `environments/*.vars.yml` | ⚑ | Pro Environment getrennte Variablen |
+| `tests/smoke/` | ⚑ | Mindestens ein Smoke-Test, der in der Pipeline läuft |
+| `tests/integration/` | ✓ | Vollständige Tests |
+| `docs/runbook.md` | ✓ | Pflicht für Silver/Gold-APIs |
+
+- ⚑ **PFLICHT** – Keine Secrets, Tokens oder Credentials im Repo (auch nicht in `environments/*.vars.yml`). Alle sensiblen Werte über Azure Key Vault + Variable Group beziehen.
+- ⚑ **PFLICHT** – Repo-Name entspricht dem API-Namen aus Kap. 2.1 (`<domäne>-<ressource>-v<major>`).
+- ✓ **EMPFOHLEN** – Pre-Commit Hooks für lokale Schema-Validierung (`api-definition.json`, `openapi.yaml`).
+
+### 7.3  Environments
+
+- ⚑ **PFLICHT** – Drei Environments sind Pflicht: `dev`, `staging`, `prod`.
+- ⚑ **PFLICHT** – Promotion `dev → staging → prod` nur über definierte Approval-Prozesse.
+
+| Environment | Besonderheiten |
+|---|---|
+| `dev` | Keyless-Plans erlaubt, volle Logs, kein HA |
+| `staging` | Produktionsnahe Konfiguration, Integrationstests |
+| `prod` | Kein Keyless, minimale Logs, HA mit min. 2 Nodes, Redis Pflicht |
+
+### 7.4  Versionierung & Breaking Changes
+
+- ⚑ **PFLICHT** – Breaking Changes erfordern eine neue Major-Version (`v1` → `v2`) und einen neuen Context-Path.
+- ⚑ **PFLICHT** – Deprecation- und Sunset-Prozess (Fristen, Kommunikation, Sunset-Header) sind im REST API Styleguide geregelt:
+
+> `<Platzhalter: Link zum REST API Styleguide, Kapitel Deprecation & Versionierung>`
+
+- ⚑ **PFLICHT** – Sunset-Datum im API-Header technisch kommunizieren (gemäß REST API Styleguide):
+
+```
+Sunset: Sat, 01 Jan 2026 00:00:00 GMT
+Deprecation: true
+```
+
+- ✓ **EMPFOHLEN** – Konsumenten bei Deprecation automatisch per E-Mail benachrichtigen (APIM Subscription-Notification).
+
+### 7.5  Hybrid-spezifische Hinweise
+
+Im Hybrid-Deployment läuft der Gateway on-premise, die Control Plane (APIM Console, Developer Portal) als SaaS:
+
+- ⚑ **PFLICHT** – Gateway muss Outbound-Verbindung zur Gravitee Cloud Control Plane haben (Port 443).
+- ⚑ **PFLICHT** – API-Schlüssel und Subscriptions werden lokal gecacht – Sync-Intervall beachten (Standard: 5 Sekunden).
+- ✓ **EMPFOHLEN** – Lokale Redis-Instanz für Rate-Limit-Synchronisation zwischen Gateway-Nodes.
+- ✓ **EMPFOHLEN** – Netzwerk-Firewall-Regeln dokumentieren und regelmäßig reviewen.
+
+---
+
+## 8  API Review & Quality Gate
+
+### 8.1  Quality-Scoring (Gravitee APIM)
+
+Gravitee APIM bietet ein konfigurierbares Quality-Scoring:
+
+| Kriterium | Gewicht | Pflicht | Prüfung |
+|---|---|---|---|
+| Beschreibung vorhanden | 10 % | Ja | Automatisch |
+| OpenAPI-Spec hinterlegt | 20 % | Ja | Automatisch |
+| Min. 1 sicherer Plan | 25 % | Ja | Automatisch |
+| Rate Limit konfiguriert | 20 % | Ja | Automatisch |
+| Labels vollständig | 15 % | Ja | Manuell |
+| Health Check aktiv | 10 % | Ja | Automatisch |
+
+⚑ **PFLICHT** – Minimum Quality Score: **80 %** – APIs unterhalb dieses Wertes werden blockiert.
+
+### 8.2  Review-Checkliste (manuell)
+
+- [ ] Namenskonventionen eingehalten (Kap. 2)
+- [ ] Security-Policy korrekt konfiguriert (Kap. 3)
+- [ ] SLA-Tier zugewiesen und passend zur Nutzung (Kap. 4)
+- [ ] Rate Limits dem SLA-Tier entsprechend gesetzt (Kap. 5.1)
+- [ ] Health Check K8s-konform (Kap. 5.3)
+- [ ] W3C Trace Context Header werden weitergereicht (Kap. 6.2)
+- [ ] Keine sensitiven Daten in Logs oder Query-Parametern
+- [ ] Azure Pipeline (`azure-pipelines.yml`) vorhanden und getestet
+- [ ] Verantwortlicher Ansprechpartner hinterlegt
+
+---
+
+## 9  Onboarding-Prozess für Producer-Teams
+
+| Schritt | Aktion |
+|---|---|
+| 1. Anfrage | Formular im internen Service-Katalog ausfüllen (Name, Domäne, SLA-Tier, Owner) |
+| 2. Template | Gravitee-API-Template (JSON/CRD) vom Platform-Team anfordern oder aus Git-Repo klonen |
+| 3. Konfiguration | Template anpassen: Endpoint, Policies, Labels, Plan gemäß diesem Styleguide |
+| 4. Validierung | Lokale Schema-Validierung; Import in Dev-Environment und Smoke-Test |
+| 5. Review | Pull Request im API-Definitions-Repo; Platform-Team reviewt |
+| 6. Staging | Nach Approval: automatisches Deployment nach Staging via Azure Pipelines |
+| 7. QA | Integrationstests und Quality-Score-Check in Staging |
+| 8. Produktion | Nach QA-Sign-off: Deployment in Prod via Azure Pipelines (manuelles Approval-Gate) |
+
+### 9.1  Kontakt & Support
+
+- **Slack:** `#platform-api-gateway`
+- **E-Mail:** `api-platform@<euer-unternehmen>.de`
+- **Ticket:** Jira-Projekt `APIGW`
+
+---
+
+## 10  Anhang
+
+### 10.1  Schnell-Referenz Pflichtanforderungen
+
+| Kategorie | Pflichtanforderungen (Kurzübersicht) |
+|---|---|
+| **Naming** | Schema `<domäne>-<ressource>-v<major>` · Context-Path mit `/v<major>` · OAS-Spec |
+| **Sicherheit** | Kein Keyless in Prod · JWT: RS256/ES256 · Kein Auto-Approve · CORS-Whitelist |
+| **SLA** | SLA-Tier zugewiesen · Werte gemäß Tier-Matrix · On-Call für Silver/Gold |
+| **Traffic** | Rate Limit pro Plan · Health Check K8s-konform · TLS für Backend-Verbindungen |
+| **Tracing** | W3C `traceparent` / `tracestate` durchreichen · OpenTelemetry-konforme Logs |
+| **Logging** | Kein Full-Log in Prod · Trace-ID in Logs übernehmen |
+| **Deployment** | Kein manuelles Deployment in Prod · Git-Versionierung · 3 Environments · Azure Pipelines (Multi-Stage YAML) · Management API oder GKO |
+| **Quality Gate** | Min. 80 % Quality Score · Manuelle Review-Checkliste bestanden |
+
+### 10.2  Weiterführende Dokumentation
+
+| Ressource | Link / Pfad |
+|---|---|
+| **REST API Styleguide (intern)** | `<Platzhalter: Link zum REST API Styleguide>` |
+| Gravitee APIM Dokumentation | <https://documentation.gravitee.io/apim> |
+| Production Best Practices | <https://documentation.gravitee.io/apim/prepare-a-production-environment> |
+| Gravitee Management API Referenz | <https://documentation.gravitee.io/apim/reference/management-api> |
+| Gravitee Kubernetes Operator (GKO) | <https://documentation.gravitee.io/gravitee-kubernetes-operator-gko> |
+| W3C Trace Context Standard | <https://www.w3.org/TR/trace-context/> |
+| OpenTelemetry Specification | <https://opentelemetry.io/docs/specs/otel/> |
+| Kubernetes Probes Doku | <https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/> |
+| Azure Pipelines Dokumentation | <https://learn.microsoft.com/azure/devops/pipelines/> |
+| API-Definitions Git-Repo (Azure Repos) | `<interne URL>` |
+| Azure Pipelines Templates (Platform-Team) | `<interner Repo-Pfad: platform-templates>` |
+
+### 10.3  Glossar
+
+| Begriff | Bedeutung |
+|---|---|
+| **SLA** | Service Level Agreement – Zusage über Servicequalität (Verfügbarkeit, Latenz, Support) |
+| **SLO** | Service Level Objective – internes Ziel, an dem das SLA gemessen wird |
+| **SLI** | Service Level Indicator – konkrete Metrik (z. B. P95-Latenz) |
+| **Error Budget** | Erlaubter Anteil fehlgeschlagener Requests pro Zeitfenster (= 100 % – SLO) |
+| **GKO** | Gravitee Kubernetes Operator |
+| **OAS** | OpenAPI Specification |
+| **OTLP** | OpenTelemetry Protocol |
+| **P50/P95/P99** | Perzentile der Antwortzeitverteilung |
+
+### 10.4  Incident-Klassifizierung
+
+| Priorität | Beschreibung | Beispiele |
+|---|---|---|
+| **P1** | Produktions-Ausfall, hoher Geschäftsimpact | API komplett down, Datenverlust, Security-Breach |
+| **P2** | Eingeschränkte Funktionalität, mittlerer Impact | Hohe Fehlerrate, Latenz weit über SLA |
+| **P3** | Geringer Impact, kein Workaround nötig | Einzelne Endpoints betroffen, kosmetische Fehler |
+
+### 10.5  Änderungshistorie
+
+| Version | Datum | Änderung |
+|---|---|---|
+| 1.0 | – | Initiale Version |
+| 1.1 | – | Logging auf W3C Trace Context / OpenTelemetry umgestellt; Terraform-Nutzung präzisiert; Verweis auf REST API Styleguide ergänzt |
+| 1.2 | – | Neues Kap. 4 SLA-Tiers & Service Levels; Wartungsfenster erklärt; Health Check um K8s-Kontext erweitert; Deprecation-Frist als Verweis auf REST API Styleguide; Glossar und Incident-Klassifizierung ergänzt |
+| 1.3 | – | Azure Pipelines als verbindliche CI/CD-Plattform; neuer Abschnitt 7.2 zu Pipeline-Struktur, Stages, Approval-Gates und Service Connections; Folgeabschnitte renummeriert |
+| 1.4 | – | Multi-Stage YAML als Pflicht präzisiert; verbindliches Repo-Layout (azure-pipelines.yml, api/, environments/, tests/, docs/) in 7.2 ergänzt; Kapitel "Infrastructure as Code" entfernt; Folgekapitel renummeriert |
+
 
