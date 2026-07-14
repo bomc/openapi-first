@@ -25,598 +25,744 @@ bomc:
 ```
 ---
 
-# Gravitee API Gateway – Integration Styleguide
 
-**Verbindliche Richtlinien für die Integration von REST-APIs**
+# Architekturbeschreibung: Logging & Monitoring für Azure Database for PostgreSQL – Flexible Server
 
-| | |
-|---|---|
-| **Deployment-Modell** | Hybrid (Gateway on-premise, Control Plane SaaS) |
-| **API-Typen** | REST/HTTP |
-| **Zielgruppen** | API-Producer-Teams, Platform/Gateway-Admins, Security & Compliance |
-| **Gravitee-Version** | APIM 4.x |
-| **Version** | 1.4 |
+Stand der Recherche: Juli 2026, basierend auf aktueller Microsoft-Learn-Dokumentation. Wo Informationen unsicher, unvollständig oder umgebungsabhängig sind, ist dies explizit gekennzeichnet.
 
 ---
 
-## 1  Einleitung
+## 1. Grundprinzip: zwei getrennte Datenpfade
 
-Dieser Styleguide legt verbindliche Regeln und Empfehlungen für die Integration von REST-APIs über das Gravitee API Management Gateway fest.
+Azure Flexible Server für PostgreSQL liefert Observability-Daten über **zwei technisch und organisatorisch unabhängige Mechanismen**, die häufig verwechselt werden:
 
-Er **ergänzt den übergeordneten REST API Styleguide** [`<Platzhalter: Link zum REST API Styleguide>`] um Gateway-spezifische Vorgaben. Bei Konflikten gilt:
-- der **REST API Styleguide** für das API-Design selbst (URL-Struktur, Payloads, Statuscodes …)
-- **dieses Dokument** für die Gateway-Konfiguration
-
-### 1.1  Zeichenerklärung
-
-| Symbol | Bedeutung | Konsequenz bei Verstoß |
+| | Plattformmetriken (Azure Monitor Metrics) | Diagnostic Settings (Logs, optional auch Metrics-Export) |
 |---|---|---|
-| ⚑ **PFLICHT** | Verbindliche Anforderung | API wird nicht deployt / Onboarding blockiert |
-| ✓ **EMPFOHLEN** | Best Practice | Begründung bei Abweichung erforderlich |
-| ℹ **INFO** | Hinweis / Erläuterung | Keine |
+| Datenquelle | Azure-Ressourcenprovider `Microsoft.DBforPostgreSQL/flexibleServers` | PostgreSQL-Serverprozess (Log-Dateien, Query Store, Sessions, PgBouncer, Autovacuum-Statistiken) |
+| Aktivierung | Standardmäßig aktiv, keine Konfiguration nötig | Muss explizit über eine Diagnostic Setting-Regel je Server konfiguriert werden |
+| Speicherort | Azure Monitor Metrics-Datenbank (intern, zeitreihenoptimiert) | Ziel frei wählbar: Log Analytics Workspace, Storage Account, Event Hub |
+| Aufbewahrung | Bis zu 93 Tage, im Portal-Chart max. 30 Tage abfragbar | Abhängig vom gewählten Ziel (z. B. Log Analytics Workspace-Aufbewahrung, standardmäßig oft 30 Tage, konfigurierbar) |
+| Abfrage | Azure Monitor Metrics Explorer, REST API, Alerts, Workbooks | Kusto Query Language (KQL) in Log Analytics, bzw. Rohdaten in Storage/Event Hub |
+| Typischer Zweck | Kurzfristiges operatives Monitoring, Schwellwert-Alerts, Kapazitätsplanung | Tiefergehende Diagnose, Query-Analyse, Audit, Troubleshooting-Guides, Langzeit-/Archivierungsszenarien |
+
+Diese Trennung ist die zentrale Architekturentscheidung, die sich in Kosten, Latenz und Aufbewahrung niederschlägt.
 
 ---
 
-## 2  Naming & Metadaten
+## 2. Baustein A: Plattformmetriken (Azure Monitor Metrics)
 
-### 2.1  API-Name
+### 2.1 Funktionsweise
+Der Ressourcenprovider `Microsoft.DBforPostgreSQL/flexibleServers` emittiert kontinuierlich Metriken direkt in den Azure-Monitor-Metrikspeicher. Dies geschieht ohne Zutun des Nutzers, ist im Grundumfang kostenfrei und unabhängig von jeder Diagnostic-Setting-Konfiguration.
 
-⚑ **PFLICHT** – API-Name folgt dem Schema: `<domäne>-<ressource>-v<major>`
+- Die meisten Metriken werden im **1-Minuten-Takt (PT1M)** erfasst.
+- Einige Kategorien (z. B. Autovacuum-Statistiken) werden nur alle **30 Minuten** oder in größeren Intervallen (PT1H, PT6H, PT12H, P1D) erfasst.
+- **Aufbewahrung vs. Abfragefenster (wichtiger Unterschied):** Die Metrikdaten selbst werden bis zu **93 Tage** im Metrikspeicher von Azure Monitor vorgehalten – das ist die reine Speicherdauer und gilt unabhängig davon, wie man die Daten betrachtet. Ein **einzelnes Diagramm** in der Metrics-Kachel (Portal oder REST API) kann davon aber nur ein zusammenhängendes Zeitfenster von maximal **30 Tagen** gleichzeitig darstellen. Das ist eine reine Abfrage-/Darstellungsbeschränkung pro Chart, keine Reduktion der Speicherdauer: Die Daten außerhalb der letzten 30 Tage sind nicht gelöscht, sondern lassen sich durch Schwenken ("pan") des Charts erreichen, oder man stellt eine neue Abfrage mit einem anderen 30-Tage-Fenster innerhalb der 93 Tage. Diese Log-basierte-Metriken-Ausnahme gilt nicht.
+  - *Praktische Konsequenz:* Für zusammenhängende Trend- oder Kapazitätsanalysen über mehr als 30 Tage (z. B. Jahresvergleiche) reicht die reine Metrics-Explorer-Ansicht nicht aus. Microsoft empfiehlt dafür den Export der Metriken über Diagnostic Settings (Kategorie `AllMetrics`) in einen Log Analytics Workspace – dort gilt die 30-Tage-Chart-Grenze nicht, und die Aufbewahrung ist über die 93 Tage hinaus frei konfigurierbar (siehe Kapitel 3).
+  - *Warum genau 30 Tage als Chart-Grenze gewählt wurden*, begründet Microsoft in der Dokumentation nicht explizit. Eine naheliegende Vermutung wäre eine Performance-/Rendering-Grenze für die interaktive Darstellung hochauflösender 1-Minuten-Zeitreihen – das ist jedoch **meine Einschätzung, keine dokumentierte Tatsache**.
+- Ein Teil der Metriken (Autovacuum-Metriken, PgBouncer-Metriken, „Enhanced Metrics") ist **standardmäßig deaktiviert** und muss über dynamische Server-Parameter aktiviert werden (kein Neustart nötig), z. B.:
+  - `metrics.autovacuum_diagnostics = ON`
+  - `metrics.pgbouncer_diagnostics = ON` (zusätzlich `pgbouncer.enabled = ON`)
+  - `metrics.collector_database_activity` für weitere granulare Metriken
 
-| Feld | Beispiel | Erlaubt | Nicht erlaubt |
-|---|---|---|---|
-| Domäne | `order` | Kleinbuchstaben, Bindestriche | Leerzeichen, Großbuchstaben |
-| Ressource | `shipments` | Plural-Substantiv | Verben (z. B. `getOrders`) |
-| Version | `v2` | `v` + Integer | `v2.1`, `2`, `V2` |
-| Vollständig | `order-shipments-v2` | – | `Order Shipments`, `orderShipmentsV2` |
+### 2.2 Wichtige Metrikkategorien (Auswahl, nicht vollständig)
 
-### 2.2  Context-Path
-
-⚑ **PFLICHT** – Context-Path enthält die Hauptversion: `/<domäne>/<ressource>/v<major>`
-
-```
-/order/shipments/v2
-```
-
-✓ **EMPFOHLEN** – Kein trailing slash; nur Kleinbuchstaben und Bindestriche.
-
-ℹ Detailregeln zu URL-Design (Pluralform, Query-Parameter, Filter etc.) sind im REST API Styleguide geregelt [`<Link zum REST API Styleguide>`].
-
-### 2.3  Beschreibung & Dokumentation
-
-- ⚑ **PFLICHT** – Beschreibung in der APIM-Konsole hinterlegt (min. 2 Sätze).
-- ⚑ **PFLICHT** – OpenAPI-Spezifikation (OAS 3.x) als Dokumentation importiert oder verlinkt.
-- ✓ **EMPFOHLEN** – Kontaktinformationen des verantwortlichen Teams (E-Mail oder Slack-Channel).
-
-### 2.4  Labels & Tags
-
-⚑ **PFLICHT** – Folgende Labels sind für jede API verpflichtend:
-
-| Label-Key | Beispielwert | Pflicht | Zweck |
-|---|---|---|---|
-| `team` | `checkout-squad` | Ja | Zuordnung Producer-Team |
-| `domain` | `order` | Ja | Fachliche Domäne |
-| `sla-tier` | `bronze` / `silver` / `gold` | Ja | SLA-Klasse (siehe Kap. 4) |
-| `environment` | `dev` / `staging` / `prod` | Ja | Deployment-Stage |
-| `data-classification` | `internal` / `confidential` / `public` | Ja | Datenschutz |
-| `lifecycle` | `active` / `deprecated` / `sunset` | Nein | Lifecycle-Status |
-
----
-
-## 3  Sicherheit & Authentifizierung
-
-### 3.1  Plans und Authentifizierung
-
-- ⚑ **PFLICHT** – Jede API muss mindestens einen Plan mit Authentifizierung besitzen.
-- ⚑ **PFLICHT** – Keyless-Plans sind in Produktionsumgebungen verboten.
-
-| Methode | Einsatzgebiet | Bewertung |
+| Kategorie | Beispielmetriken | Bemerkung |
 |---|---|---|
-| OAuth2 / JWT | Standard für externe & interne APIs | **Bevorzugt** |
-| API Key | Einfache M2M-Szenarien | Akzeptiert |
-| mTLS | Hochsicherheits-Integrationen | Akzeptiert |
-| Keyless | Nur Dev-Sandbox mit expliziter Freigabe | Ausnahme |
+| Saturation | `cpu_percent`, `memory_percent`, `storage_percent`, `storage_used`, `storage_free`, `iops`, `read_iops`, `write_iops`, `disk_iops_consumed_percentage`, `disk_bandwidth_consumed_percentage`, `disk_queue_depth`, `backup_storage_used`, `cpu_credits_consumed/remaining` (nur Burstable-SKU) | Kern-Infrastrukturmetriken für Kapazitäts- und Performance-Monitoring |
+| Traffic | `active_connections`, `connections_succeeded`, `max_connections`, `network_bytes_ingress/egress`, `tcp_connection_backlog` (ab 8 vCores) | Verbindungslast |
+| Errors | `connections_failed` | Fehlgeschlagene Verbindungsversuche |
+| Availability | `is_db_alive` (1 = verfügbar, 0 = nicht verfügbar) | Für Verfügbarkeits-Alerts geeignet |
+| Database | `xact_commit`, `xact_rollback`, `deadlocks`, `tup_inserted/updated/deleted/fetched`, `temp_files`, `temp_bytes`, `database_size_bytes`, `numbackends`, `tps` (Preview) | Je Datenbank aufschlüsselbar über Dimension `DatabaseName` |
+| Replication | `physical_replication_delay_in_bytes`, `physical_replication_delay_in_seconds` | Read-Replica-Lag |
+| Logical Replication | `logical_replication_delay_in_bytes`, `logical_replication_slot_sync_status` (Preview) | Für logische Replikation/CDC-Szenarien |
+| Activity | `longest_query_time_sec`, `longest_transaction_time_sec`, `oldest_backend_time_sec`, `sessions_by_state`, `sessions_by_wait_event_type` | Session- und Wait-Event-Übersicht |
+| Autovacuum | `n_dead_tup_user_tables`, `n_live_tup_user_tables`, `bloat_percent` (Preview), `vacuum_count_user_tables` u. a. | Muss aktiviert werden, 30-Minuten-Takt |
+| PgBouncer | `client_connections_active/waiting`, `server_connections_active/idle`, `num_pools`, `total_pooled_connections` | Nur relevant, wenn integrierter PgBouncer genutzt wird |
 
-### 3.2  JWT-Konfiguration
+*Hinweis:* Die vollständige, verbindliche Liste inkl. exakter Einheiten und Aggregationstypen findet sich in der Microsoft-Referenz „Supported metrics – Microsoft.DBforPostgreSQL/flexibleServers". Ich gebe hier eine kuratierte Auswahl wieder, keine vollständige Kopie der Tabelle.
 
-- ⚑ **PFLICHT** – Signature-Algorithmus: `RS256` oder `ES256` (kein `HS256` in Produktion).
-- ⚑ **PFLICHT** – Token-Expiry prüfen (`exp`-Claim).
-- ⚑ **PFLICHT** – Issuer (`iss`) und Audience (`aud`) müssen validiert werden.
-- ✓ **EMPFOHLEN** – JWKS-Endpoint statt statischem Public Key.
+### 2.3 Vertiefung: Autovacuum-, PgBouncer- und „Enhanced"-Metriken
 
-### 3.3  OAuth2-Konfiguration
+Diese drei Gruppen sind nicht Teil der Standard-Metriken und werden erfahrungsgemäß am häufigsten übersehen, obwohl sie für den produktiven Betrieb relevant sind.
 
-- ⚑ **PFLICHT** – Token Introspection Endpoint über HTTPS.
-- ⚑ **PFLICHT** – Scopes auf Plan-Ebene dokumentiert.
-- ✓ **EMPFOHLEN** – Access Token Cache aktivieren (Cache TTL < Token Expiry).
+**a) Autovacuum-Metriken – was und wozu**
 
-### 3.4  Subscription-Prozess
+PostgreSQL nutzt intern einen Hintergrundprozess namens *Autovacuum*, der zwei Aufgaben übernimmt:
+- **VACUUM**: entfernt „tote" Zeilen (dead tuples), die durch UPDATE/DELETE entstehen (PostgreSQL überschreibt Zeilen nicht, sondern markiert alte Versionen als ungültig – MVCC-Modell), und gibt den Platz für Wiederverwendung frei.
+- **ANALYZE**: aktualisiert die Tabellenstatistiken, die der Query-Planer für Ausführungspläne benötigt.
 
-- ⚑ **PFLICHT** – Auto-Validierung von Subscriptions deaktivieren; manuelle Prüfung durch API-Owner.
-- ⚑ **PFLICHT** – Subscription-Kommentar als Pflichtfeld aktivieren (Begründung des Konsumenten).
-- ✓ **EMPFOHLEN** – Subscriptions mindestens quartalsweise reviewen und verwaiste Subscriptions widerrufen.
-- ✓ **EMPFOHLEN** – Benachrichtigungen für neue Subscription-Anfragen an das Producer-Team konfigurieren.
+Läuft Autovacuum nicht ausreichend, wachsen Tabellen unnötig an (**Bloat**), Abfragen werden langsamer, und im schlimmsten Fall droht ein **Transaction-ID-Wraparound** – ein Zustand, der PostgreSQL zwingt, in einen reinen Lesemodus zu wechseln, bis manuell eingegriffen wird. Die Autovacuum-Metriken (`n_dead_tup_user_tables`, `n_live_tup_user_tables`, `bloat_percent`, `vacuum_count_user_tables`, `autovacuum_count_user_tables` u. a.) machen genau diesen Zustand sichtbar, bevor er kritisch wird.
 
-### 3.5  CORS
+*Warum standardmäßig deaktiviert:* Microsoft dokumentiert nur, dass diese Metriken „disabled by default" sind, nennt aber keinen expliziten Grund. Naheliegend – aber von mir nicht als gesicherte Tatsache, sondern als plausible Einschätzung markiert – ist, dass die Erhebung dieser Statistiken pro Tabelle und Datenbank zusätzliche Last auf den Systemkatalogen erzeugt und Microsoft sie daher als Opt-in-Feature für Nutzer anbietet, die aktives Autovacuum-Tuning betreiben, statt sie pauschal für alle Server zu erheben.
 
-- ⚑ **PFLICHT** – CORS auf API-Ebene konfigurieren; **niemals** Wildcard (`*`) in Produktionsumgebungen.
-- ⚑ **PFLICHT** – Erlaubte Origins explizit whitelist-basiert pflegen.
-- ✓ **EMPFOHLEN** – Allowed Methods auf das notwendige Minimum beschränken.
+*Aktivierung:* Server-Parameter `metrics.autovacuum_diagnostics = ON` (dynamisch, kein Neustart nötig). Erfassungsintervall 30 Minuten. Dimension `DatabaseName` ist auf 30 Datenbanken begrenzt (10 bei Burstable-SKU).
 
-```
-Access-Control-Allow-Origin: https://app.example.com
-```
+**b) PgBouncer-Metriken – was und wozu**
 
-### 3.6  TLS
+PgBouncer ist ein leichtgewichtiger **Connection Pooler** für PostgreSQL. Er liegt logisch zwischen Anwendung und Datenbank und verwaltet einen Pool bestehender Datenbankverbindungen, die er an eingehende Client-Anfragen weiterreicht, statt für jede Anfrage eine neue physische Verbindung zum PostgreSQL-Server aufzubauen. Das ist relevant, weil jede neue PostgreSQL-Verbindung vergleichsweise teuer ist (eigener Serverprozess, Speicher-Overhead) – bei vielen kurzlebigen Verbindungen (z. B. serverlose Architekturen, Microservices mit vielen Instanzen) kann das den Server stark belasten. Azure Flexible Server bietet PgBouncer als **integriertes, optionales Feature** an.
 
-- ⚑ **PFLICHT** – Alle Backend-Verbindungen (Endpoint) über HTTPS/TLS 1.2+.
-- ⚑ **PFLICHT** – Self-signed Certificates nur in Dev/Staging; in Produktion nur CA-signierte Zertifikate.
-- ✓ **EMPFOHLEN** – `trustAll=false` in der Gateway-Konfiguration belassen (Standard seit Gravitee 4.4).
+Die PgBouncer-Metriken (`client_connections_active`, `client_connections_waiting`, `server_connections_active`, `server_connections_idle`, `num_pools`, `total_pooled_connections`) zeigen, ob der Pooler selbst zum Engpass wird – etwa wenn viele Client-Verbindungen auf einen freien Pool-Slot warten müssen (`client_connections_waiting` steigt).
 
----
+*Was PgBouncer technisch ist:* PgBouncer ist ursprünglich ein eigenständiges, quelloffenes Open-Source-Projekt (nicht von Microsoft entwickelt). Bei Azure Flexible Server handelt es sich um eine **von Microsoft integrierte, mitgelieferte Instanz** dieser Software – kein separates Produkt, das man zusätzlich installieren, verwalten oder patchen müsste. Sie läuft laut Dokumentation auf derselben virtuellen Maschine wie der PostgreSQL-Serverprozess selbst, also nicht als separate, zusätzlich abgerechnete Infrastruktur.
 
-## 4  SLA-Tiers & Service Levels
+*Kostenpflichtig?* Für die Nutzung des integrierten PgBouncer wird in der Dokumentation **keine separate Gebühr oder eigene SKU genannt** – es ist ein Server-Parameter am bestehenden, bereits bezahlten Flexible-Server, keine zusätzliche Azure-Ressource. Eine explizite Aussage von Microsoft der Form „PgBouncer ist kostenlos" habe ich allerdings nicht gefunden; meine Einschätzung „keine separaten Zusatzkosten" leite ich daraus ab, dass keine eigene abrechenbare Ressource entsteht – das ist eine Schlussfolgerung, keine wörtlich zitierte Garantie. Für eine verbindliche Aussage empfiehlt sich ein Blick in den Azure-Preisrechner bzw. Rückfrage beim Support.
 
-Service Level Agreements (SLAs) definieren Zusagen über Verfügbarkeit, Latenz, Durchsatz und Support einer API. Sie sind die Grundlage für Rate Limiting (Kap. 5.1), Monitoring-Alerts (Kap. 6.4), Eskalationsketten und Wartungsplanung.
+*Was „aktivieren" konkret bedeutet:* Es wird keine neue Software installiert – der PgBouncer-Prozess ist bereits Teil der Server-Infrastruktur, standardmäßig aber inaktiv. „Aktivieren" heißt lediglich, den Server-Parameter `pgbouncer.enabled` im Bereich „Server-Parameter" (Portal, Azure CLI oder Terraform) von `false` auf `true` zu setzen – dynamisch, ohne Neustart. Danach lauscht PgBouncer zusätzlich auf **Port 6432** (statt des normalen PostgreSQL-Ports 5432) unter demselben Hostnamen. Damit eine Anwendung den Pooler tatsächlich nutzt, muss zusätzlich die **Verbindungskonfiguration der Anwendung** von Port 5432 auf 6432 umgestellt werden – reines Aktivieren des Parameters ändert also noch nicht automatisch, wie sich bestehende Anwendungen verbinden. Der direkte Weg über Port 5432 bleibt parallel weiterhin nutzbar.
 
-Jede API wird über das Label `sla-tier` (siehe Kap. 2.4) genau einem Tier zugeordnet: **Bronze**, **Silver** oder **Gold**.
+*Praktische Einschränkungen, die für die Architekturentscheidung relevant sind:*
+- Wird **nicht unterstützt auf der Burstable-Recheneinheit** (Compute Tier). Ein Wechsel von General Purpose/Memory Optimized zu Burstable deaktiviert PgBouncer automatisch mit.
+- Bei jedem Server-Neustart (Skalierung, HA-Failover, Wartung) wird PgBouncer mit neu gestartet – bestehende gepoolte Verbindungen müssen dann neu aufgebaut werden, genau wie normale Datenbankverbindungen auch.
+- Bei zonenredundanten HA-Servern läuft PgBouncer nur auf dem jeweils aktiven Primärserver; nach einem Failover wird es auf dem neu beförderten Server automatisch mit gestartet, der Verbindungsstring der Anwendung bleibt unverändert.
 
-ℹ Die Werte gelten für den **Gateway-Layer**. Backend-Services können zusätzlich eigene SLAs definieren – das End-to-End-SLA ist nur so gut wie das schwächste Glied.
+*Warum standardmäßig deaktiviert:* PgBouncer ist selbst ein optionales Feature (nicht jeder Server nutzt es), entsprechend sind auch die zugehörigen Metriken nur relevant und aktivierbar, wenn PgBouncer überhaupt läuft.
 
-### 4.1  SLA-Tier-Matrix
+*Aktivierung – zweistufig:*
+1. `pgbouncer.enabled = ON` (aktiviert den Pooler selbst)
+2. `metrics.pgbouncer_diagnostics = ON` (aktiviert die Metriken dazu)
 
-| Dimension | Bronze | Silver | Gold |
-|---|---|---|---|
-| **Verfügbarkeit** | 99,0 % | 99,5 % | 99,9 % |
-| **Maximale Downtime/Jahr** | ~ 87,6 h | ~ 43,8 h | ~ 8,76 h |
-| **P95-Latenz (Gateway-Overhead)** | < 1.000 ms | < 500 ms | < 200 ms |
-| **Rate Limit (Burst)** | 10 req/s | 50 req/s | 200 req/s |
-| **Quota (Langzeit)** | 10.000 req/Tag | 100.000 req/Tag | Fair Use |
-| **Error Budget** | 1,0 % | 0,5 % | 0,1 % |
-| **Support-Reaktion P1** | 4 h (Werktage) | 1 h (24/7) | 15 min (24/7) |
-| **Support-Reaktion P2** | 1 Werktag | 4 h | 1 h |
-| **Wartungsfenster** | beliebig | werktags 22:00 – 06:00 | nur Sa/So 02:00 – 06:00 |
-| **Deprecation-Frist** | siehe REST API Styleguide [`<Link>`] | siehe REST API Styleguide [`<Link>`] | siehe REST API Styleguide [`<Link>`] |
+Beide Parameter sind dynamisch. Auch hier gilt das 30-Datenbanken-Limit (10 bei Burstable) für die `DatabaseName`-Dimension.
 
-### 4.2  Wartungsfenster
+**c) „Enhanced Metrics" – Begriffsklärung**
 
-#### Braucht Gravitee Downtime?
+„Enhanced Metrics" ist Microsofts Sammelbegriff für eine Gruppe **zusätzlicher, feingranularer Metriken**, die über die im Standard aktiven Infrastruktur-Metriken (CPU, Memory, Storage, IOPS etc.) hinausgehen und tiefere Einblicke je Datenbank oder Session ermöglichen. Autovacuum- und PgBouncer-Metriken lassen sich als Teilmengen dieser erweiterten Metrik-Welt verstehen; der zentrale Freischalt-Parameter für weitere „Enhanced"-Metriken (jenseits von Autovacuum/PgBouncer) ist:
 
-**Nein – bei korrekter HA-Konfiguration nicht.** Gravitee unterstützt Rolling Updates, Blue/Green- und Canary-Deployments. Ein produktiver Gateway-Cluster mit mindestens 2 Nodes hinter einem Load Balancer kann ohne Service-Unterbrechung aktualisiert werden.
+- `metrics.collector_database_activity = ON`
 
-Wartungsfenster sind dennoch erforderlich, weil das Gesamtsystem mehr umfasst als nur den Gateway:
+Laut Dokumentation ist ein Teil dieser erweiterten Metriken bereits standardmäßig aktiv, der überwiegende Teil muss aber explizit eingeschaltet werden. Eine vollständige, verbindliche Aufschlüsselung, welche einzelnen Metriken darunterfallen und welche davon per Default an sind, gebe ich hier bewusst nicht wieder, da ich dafür keine abschließend sichere Quelle mit vollständiger Liste identifiziert habe – für eine verbindliche Zuordnung bitte die Microsoft-Referenztabelle „Supported metrics" konsultieren und dort die Spalte für den Default-Status prüfen.
 
-| Szenario | Warum Wartungsfenster? |
-|---|---|
-| Backend-Service-Wartung | Restarts, Schema-Migrationen, Breaking Deployments der eigentlichen API |
-| Gravitee Major-Upgrade | Konfigurationsmigration, Plugin-Updates, ggf. Repository-Migration |
-| Datenbank-Wartung | Elasticsearch/OpenSearch Upgrades, Index-Rebuilds, MongoDB-Wartung |
-| Infrastruktur-Arbeiten | Netzwerk, Load Balancer, Zertifikat-Rotation, Firewall-Regeln |
-| Breaking-Config-Changes | Konfigurationsänderungen, die einen Gateway-Restart erfordern |
-
-#### Warum sind die Fenster für höhere Tiers enger?
-
-Höhere Verfügbarkeitszusagen lassen weniger Spielraum für Wartung:
-
-- **Gold (99,9 %)**: max. ~ 8,76 h Downtime/Jahr → Wartung nur in Nebenzeiten (Wochenende, Nacht), um Konsumenten-Impact zu minimieren
-- **Silver (99,5 %)**: max. ~ 43,8 h/Jahr → werktags abends/nachts vertretbar
-- **Bronze (99,0 %)**: max. ~ 87,6 h/Jahr → flexibles Fenster, auch geschäftszeiten-nah
-
-#### Pflichten beim Wartungsfenster
-
-- ⚑ **PFLICHT** – Wartungsfenster mindestens **5 Werktage** vorher ankündigen (E-Mail an alle Subscriber + Status-Page-Eintrag).
-- ⚑ **PFLICHT** – Bei Notfall-Wartung: Ankündigung sobald möglich, Post-Mortem binnen 5 Werktagen.
-- ✓ **EMPFOHLEN** – Auch bei Zero-Downtime-Deployments einen Status-Page-Eintrag setzen („Wartung läuft, keine Beeinträchtigung erwartet").
-- ✓ **EMPFOHLEN** – Bei Gold-APIs: Maintenance-Mode-Plan vorbereiten (Read-only-Fallback, Cache-only-Modus).
-
-### 4.3  Support & Eskalation
-
-- ⚑ **PFLICHT** – Jedes Producer-Team benennt einen primären und einen Stellvertreter-Ansprechpartner pro API.
-- ⚑ **PFLICHT** – Für Silver- und Gold-APIs: 24/7-Erreichbarkeit per On-Call-Rotation.
-- ⚑ **PFLICHT** – Incident-Klassifizierung nach P1/P2/P3 (Definition im Anhang 10.4).
-- ✓ **EMPFOHLEN** – Gravitee Alert Engine (Kap. 6.5) als primärer Trigger für Eskalation nutzen.
+### 2.4 Nutzung/Konsumenten
+- **Metrics Explorer** im Portal (Ad-hoc-Analyse, Chart-Overlay mehrerer Metriken)
+- **Azure Monitor Alerts** (schwellwertbasiert, z. B. `storage_percent > 85`)
+- **Eingebettete Grafana-Dashboards** im Portal: Diese sind laut Dokumentation direkt im Azure-Portal integriert, ohne Zusatzkosten und ohne Einrichtungsaufwand, und visualisieren die Kern-Plattformmetriken; bei aktivierten Diagnostic Settings können sie Metriken und Logs korreliert darstellen.
+- **Azure Monitor Workbooks** mit vorgefertigten Templates (u. a. „Enhanced Metrics"-Workbook)
+- **Export** einzelner Metriken über Diagnostic Settings (Kategorie `AllMetrics`) in einen Log Analytics Workspace (Tabelle `AzureMetrics`) – das ist der einzige Berührungspunkt zwischen Baustein A und B.
 
 ---
 
-## 5  Traffic Management & Policies
+## 3. Baustein B: Diagnostic Settings (Logs)
 
-### 5.1  Rate Limiting & Quota
+### 3.1 Funktionsweise
+Diagnostic Settings sind eine separate Azure-Monitor-Ressource, die pro PostgreSQL-Flexible-Server-Instanz angelegt werden muss. Sie definiert:
+1. **Welche Log-Kategorien** exportiert werden,
+2. **Wohin** sie exportiert werden (Log Analytics Workspace, Storage Account, Event Hub, Partnerlösung),
+3. optional zusätzlich den Export der Plattformmetriken (`AllMetrics`, siehe 2.3).
 
-- ⚑ **PFLICHT** – Jede API muss mindestens eine Rate-Limit-Policy pro Plan besitzen.
-- ⚑ **PFLICHT** – Quota (langfristiges Limit) und Rate Limit (kurzfristiger Burst-Schutz) **getrennt** konfigurieren.
-- ⚑ **PFLICHT** – Werte gemäß SLA-Tier (siehe Kap. 4.1) setzen; Abweichungen erfordern Genehmigung des Platform-Teams.
-- ✓ **EMPFOHLEN** – Spike Arrest zusätzlich zum Rate Limit.
-- ✓ **EMPFOHLEN** – Redis als Rate-Limit-Store (synchrone Zähler über Gateway-Nodes).
+Ohne aktive Diagnostic Setting werden **keine** Logs erfasst – dies ist eine bewusste Opt-in-Architektur.
 
-### 5.2  Timeout-Konfiguration
+### 3.2 Verfügbare Log-Kategorien
 
-- ⚑ **PFLICHT** – Connect Timeout: max. **5 Sekunden**.
-- ⚑ **PFLICHT** – Read Timeout: max. **30 Sekunden** (Default); Long-Polling-APIs explizit dokumentieren und genehmigen lassen.
-- ✓ **EMPFOHLEN** – Backend-Timeout kürzer als Gateway-Timeout setzen.
-
-### 5.3  Health Check (Kubernetes-Kontext)
-
-Die meisten Backend-Services laufen in einem **Kubernetes-Cluster**. Dadurch entsteht eine **Zwei-Ebenen-Health-Architektur**:
-
-| Ebene | Wer prüft? | Was wird geprüft? | Reaktion |
-|---|---|---|---|
-| **Pod-Ebene** | Kubernetes (`livenessProbe` / `readinessProbe`) | Einzelner Pod gesund? | Ungesunde Pods aus dem K8s-Service entfernen, ggf. neu starten |
-| **API-/Endpoint-Ebene** | Gravitee Health Check | K8s-Service erreichbar und funktional? | Endpoint im Gateway als unhealthy markieren, Alerts auslösen, Analytics aktualisieren |
-
-Beide Ebenen sind **komplementär**, nicht redundant: K8s reagiert granular auf Pod-Ebene, Gravitee aggregiert auf API-Ebene für Monitoring, Alerts und Developer-Portal-Status.
-
-#### Pflichten
-
-- ⚑ **PFLICHT** – Gravitee Health Check pro API aktivieren. Ziel ist der **K8s-Service** (Cluster-IP / Service-Name), nicht einzelne Pods.
-- ⚑ **PFLICHT** – Gravitee Health Check **nicht aggressiver** konfigurieren als die K8s Readiness Probe. Andernfalls markiert Gravitee Endpoints als unhealthy, bevor Kubernetes den Pod austauschen kann (Race Condition, unnötige Alarme).
-- ✓ **EMPFOHLEN** – **Identischer `/health`-Endpoint** für K8s und Gravitee (Single Source of Truth).
-- ✓ **EMPFOHLEN** – Intervalle abstimmen:
-
-| Probe | Intervall | Timeout | Threshold |
-|---|---|---|---|
-| K8s Readiness Probe | 5 – 10 s | 1 – 3 s | failure: 3 |
-| K8s Liveness Probe | 10 – 30 s | 1 – 5 s | failure: 3 |
-| **Gravitee Health Check** | **30 s** | **5 s** | **healthy: 2 / unhealthy: 3** |
-
-#### Hinweis: Gravitee Gateway selbst in Kubernetes
-
-Wenn das Gravitee Gateway selbst in Kubernetes läuft (via Helm Chart oder Gravitee Kubernetes Operator GKO), übernehmen die K8s-Probes die Verwaltung des Gateway-Pods. Es ist **kein zusätzlicher Health Check für das Gateway** zu konfigurieren – die Gravitee-Health-Check-Policy aus diesem Kapitel betrifft ausschließlich die **Backend-Endpoints**, die das Gateway proxiet.
-
-### 5.4  Request-Validation & Transformation
-
-- ✓ **EMPFOHLEN** – OAS Validation Policy aktivieren.
-- ✓ **EMPFOHLEN** – Interne Infrastruktur-Header vor Weiterleitung entfernen.
-- ⚑ **PFLICHT** – Keine sensitiven Daten (Passwörter, Tokens) in Query-Parametern.
-
-### 5.5  Caching
-
-- ✓ **EMPFOHLEN** – Cache-Policy nur für GET-Endpunkte mit deterministischen Antworten.
-- ✓ **EMPFOHLEN** – Cache-TTL an `Cache-Control`-Header des Backends anpassen.
-- ⚑ **PFLICHT** – Caching **niemals** für Endpunkte mit personenbezogenen Daten.
-
----
-
-## 6  Logging, Monitoring & Observability
-
-### 6.1  Request-/Response-Logging
-
-- ⚑ **PFLICHT** – Full Request/Response Logging in Produktion **deaktivieren** (Performance & Datenschutz).
-- ⚑ **PFLICHT** – Für Debugging nur temporär und ausschließlich für definierte Test-Subscriptions aktivieren.
-
-### 6.2  Distributed Tracing (OpenTelemetry / W3C Trace Context)
-
-Verteiltes Tracing erfolgt nach dem [W3C Trace Context Standard](https://www.w3.org/TR/trace-context/), kompatibel mit OpenTelemetry. Damit ist End-to-End-Tracing über den Gateway und alle nachgelagerten Backend-Services hinweg möglich.
-
-- ⚑ **PFLICHT** – Die W3C Trace Context Header müssen vom Gateway transparent an das Backend weitergereicht werden.
-- ⚑ **PFLICHT** – Falls kein `traceparent`-Header im eingehenden Request vorhanden ist, generiert der Gateway einen neuen (per Policy oder OpenTelemetry-Plugin).
-
-| Header | Standard | Zweck |
+| Kategorie (interner Name) | Anzeigename | Inhalt |
 |---|---|---|
-| `traceparent` | W3C Trace Context | Trace-ID, Span-ID, Sampling-Flag (Pflicht-Header) |
-| `tracestate` | W3C Trace Context | Vendor-spezifischer Tracing-Kontext (optional) |
-| `baggage` | W3C Baggage | Anwendungs-Kontext (optional, OpenTelemetry) |
+| `PostgreSQLLogs` | PostgreSQL Server Logs | Klassisches PostgreSQL-Server-Log (z. B. Fehler, Verbindungen, je nach `log_*`-Serverparametern) |
+| `PostgreSQLFlexSessions` | PostgreSQL Sessions data | Sitzungsbezogene Daten |
+| `PostgreSQLFlexQueryStoreRuntime` | PostgreSQL Query Store Runtime | Laufzeitstatistiken einzelner Queries (Query Store muss aktiviert sein) |
+| `PostgreSQLFlexQueryStoreWaitStats` | PostgreSQL Query Store Wait Statistics | Wartestatistiken je Query |
+| `PostgreSQLQueryStoreSqlText` | PostgreSQL Query Store SQL Text | SQL-Text zu den Query-Store-Einträgen |
+| `PostgreSQLFlexTableStats` | PostgreSQL Autovacuum and schema statistics | Tabellen-/Schema-Statistiken |
+| `PostgreSQLFlexDatabaseXacts` | PostgreSQL remaining transactions | Transaction-ID-Wraparound-relevante Daten |
+| `PostgreSQLFlexPGBouncer` | PostgreSQL PgBouncer Logs | PgBouncer-Log-Einträge |
+| (Metrics-Kategorie) `AllMetrics` | – | Export der unter Kapitel 2 beschriebenen Plattformmetriken in dasselbe Ziel |
 
-Beispiel:
+Diese Liste stammt aus der aktuellen Microsoft-Referenzdokumentation (Stand des Abrufs: Juli 2026) und kann sich mit neuen Server-Features (z. B. neue PgBouncer- oder Query-Store-Funktionen) ändern.
 
+### 3.3 Zielspeicher und Tabellenmodell
+
+Bei Ziel **Log Analytics Workspace** gibt es zwei grundsätzlich unterschiedliche „Collection Modes", zwischen denen man sich beim Anlegen der Diagnostic Setting entscheidet. Das ist keine PostgreSQL-Spezifität, sondern ein Azure-Monitor-weites Konzept, das für alle Ressourcentypen gilt, die es unterstützen.
+
+**a) „Azure diagnostics" (Legacy-Modell)**
+Alle Log-Kategorien aller Ressourcen, die dieses Modell nutzen, landen in **einer einzigen, generischen Tabelle** namens `AzureDiagnostics`. Diese Tabelle hat ein sehr generisches Spaltenschema (u. a. eine Spalte `Category`, über die man die eigentliche Log-Kategorie – z. B. `PostgreSQLLogs` – herausfiltern muss) plus diverse, je nach Ressourcentyp unterschiedlich befüllte Freitext-/JSON-Spalten. Praktisch bedeutet das: Man muss beim Abfragen immer zuerst nach `Category` filtern, und die eigentlichen Nutzdaten liegen oft in einer generischen Spalte, die man erst parsen muss.
+
+**b) „Resource specific" (auch „Dedicated" genannt, empfohlenes Modell)**
+Jede Log-Kategorie bekommt ihre **eigene, sprechend benannte Tabelle** mit einem fest definierten, spezifischen Spaltenschema – für PostgreSQL Flexible Server z. B.:
+- `PostgreSQLLogs` → Tabelle `PGSQLServerLogs`
+- `PostgreSQLFlexTableStats` → Tabelle `PGSQLAutovacuumStats`
+- (weitere Kategorien analog, jeweils mit eigenem Tabellennamen)
+
+Vorteile laut Dokumentation: klar strukturierte Spalten ohne Generic-Parsing, schnellere und einfachere KQL-Abfragen, und die Möglichkeit, pro Tabelle unterschiedliche Aufbewahrungsfristen im selben Log Analytics Workspace zu setzen (z. B. Server-Logs 30 Tage, Audit-relevante Kategorien länger). Aus diesem Grund empfiehlt Microsoft „Resource specific" explizit als Standardwahl für neue Implementierungen; das Legacy-Modell `AzureDiagnostics` gilt als in Auslauf befindlich (laut Community-/Blogquellen als „wird langfristig abgelöst" beschrieben – für eine offizielle, verbindliche Abkündigungs-Timeline habe ich allerdings keine gesicherte Microsoft-Quelle gefunden, das ist daher nicht als bestätigte Tatsache zu verstehen).
+
+Technisch wird die Wahl über den Parameter **`log_analytics_destination_type`** gesteuert: Wert `Dedicated` = Resource specific, `AzureDiagnostics` (bzw. kein Wert) = Legacy-Modell. Dieser Parameter wirkt sich **ausschließlich** auf das Ziel „Log Analytics Workspace" aus – bei Storage Account oder Event Hub gibt es dieses Konzept nicht in der gleichen Form.
+
+- Bei Ziel **Event Hub**: für Streaming an externe SIEM-/Log-Management-Lösungen (z. B. Splunk, Sumo Logic) oder eigene Verarbeitung.
+- Bei Ziel **Storage Account**: für kostengünstige Langzeitarchivierung/Compliance, keine native Abfragefunktion.
+
+**Terraform-Unterstützung:** Ja, das lässt sich vollständig über Terraform steuern. Die Ressource `azurerm_monitor_diagnostic_setting` besitzt das optionale Attribut `log_analytics_destination_type`, das genau diesen Azure-API-Parameter abbildet:
+
+```hcl
+resource "azurerm_monitor_diagnostic_setting" "pg" {
+  name                       = "pg-diagnostics"
+  target_resource_id         = azurerm_postgresql_flexible_server.this.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
+  log_analytics_destination_type = "Dedicated"   # = "Resource specific"
+
+  enabled_log {
+    category = "PostgreSQLLogs"
+  }
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
 ```
-traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+
+Zwei praxisrelevante Einschränkungen dazu, die in öffentlichen GitHub-Issues zum `azurerm`-Provider dokumentiert sind:
+- Das Attribut **wirkt nur, wenn gleichzeitig ein `log_analytics_workspace_id` gesetzt ist** – ohne Log-Analytics-Ziel hat es keine Wirkung.
+- Bei manchen Azure-Ressourcentypen (in den Issues wird u. a. Key Vault genannt) gibt die Azure-API für dieses Feld inkonsistente oder leere Werte zurück, was in Terraform zu wiederkehrendem Plan-„Drift" führen kann (das Feld erscheint bei jedem `terraform plan` als vermeintliche Änderung, obwohl sich nichts geändert hat). Für PostgreSQL Flexible Server ist mir dieses spezifische Verhalten **nicht mit Sicherheit bekannt** – ich habe keine Quelle gefunden, die das Verhalten für genau diesen Ressourcentyp bestätigt oder ausschließt. Falls in der Praxis ein solcher Drift auftritt, ist der dokumentierte Workaround, das Attribut per `lifecycle { ignore_changes = [log_analytics_destination_type] }` von der Drift-Erkennung auszunehmen.
+
+### 3.4 Abfrage (Beispiel KQL, Resource-specific-Tabelle)
+```kql
+PGSQLServerLogs
+| where LogicalServerName == "example-flexible-server"
+| where TimeGenerated > ago(1d)
 ```
+Bei „Azure diagnostics"-Modell äquivalent über `AzureDiagnostics` mit Filter `Category == "PostgreSQLLogs"`.
 
-- ⚑ **PFLICHT** – Logging und Metriken am Gateway müssen Trace-ID und Span-ID aus dem `traceparent`-Header extrahieren und in alle Log-Einträge übernehmen.
-- ✓ **EMPFOHLEN** – OpenTelemetry-Exporter im Gateway konfigurieren (OTLP-Endpoint auf zentralen Collector, z. B. Tempo, Jaeger, Datadog APM).
 
-### 6.3  Gravitee-eigene Tracing-Header
+### 3.5 Nutzung/Konsumenten
+- **Log Analytics / KQL** für Ad-hoc-Diagnose, Reports, Alerts auf Log-Basis
+- **Troubleshooting Guides** im Portal (sechs vordefinierte Problemfelder, z. B. hohe CPU, hohe IOPS): Diese benötigen laut Dokumentation zwingend Diagnostic Settings mit Ziel Log Analytics Workspace, zusätzlich Query Store und Enhanced Metrics als Datenquellen.
+- **Workbooks**, die Metriken und Logs kombiniert darstellen
+- **Externe SIEM/Log-Management-Systeme** über Event Hub (z. B. für Security-/Audit-Auswertungen, Compliance)
 
-Gravitee setzt zusätzlich eigene Tracing-Header. Diese sind **komplementär** zum W3C-Standard, **kein Ersatz**:
-
-| Header | Bedeutung |
-|---|---|
-| `X-Gravitee-Transaction-Id` | Gateway-interne Transaktions-ID (mehrere Requests einer Transaktion) |
-| `X-Gravitee-Request-Id` | Gateway-interne Request-ID (einzelner Request) |
-
-- ✓ **EMPFOHLEN** – Gravitee-Header in den Gateway-Logs belassen; für Backend-Tracing wird ausschließlich `traceparent`/`tracestate` verwendet.
-- ✓ **EMPFOHLEN** – Bei Bedarf können die Gravitee-Header per Header-Transformation-Policy entfernt werden, bevor der Request das Backend erreicht.
-
-### 6.4  Analytics & Dashboards
-
-- ⚑ **PFLICHT** – Analytics aktiviert lassen (Elasticsearch/OpenSearch).
-- ✓ **EMPFOHLEN** – Pro SLA-Tier ein dediziertes Grafana/Kibana-Dashboard.
-- ✓ **EMPFOHLEN** – Trace-ID als Drilldown-Link zwischen Logs/Metrics/Traces nutzen (z. B. Grafana Tempo Integration).
-- ✓ **EMPFOHLEN** – Alerts für folgende Schwellwerte (am SLA-Tier orientiert, siehe Kap. 4.1):
-  - Error Rate > Error Budget × 5 über 5 Minuten → Warning
-  - Error Rate > Error Budget × 10 über 5 Minuten → Critical
-  - P95-Latenz > Tier-Latenz-Ziel über 10 Minuten → Warning
-  - Rate Limit Quota > 80 % ausgeschöpft → Warning
-
-### 6.5  Gravitee Alert Engine
-
-- ✓ **EMPFOHLEN** – Gravitee Alert Engine für proaktive Benachrichtigungen.
-- ✓ **EMPFOHLEN** – Benachrichtigungen an Slack-Channel des Producer-Teams.
-- ✓ **EMPFOHLEN** – SLA-Tier-basierte Eskalationsketten definieren (P1/P2/P3 → siehe Kap. 4.3).
+### 3.6 Abgrenzung: „Server Logs"-Feature vs. Diagnostic Settings
+Zusätzlich zu Diagnostic Settings gibt es im Portal unter „Server-Parameter/Server-Logs" eine eigene, davon unabhängige Funktion: Rohe Log-Dateien können direkt am Server aktiviert und heruntergeladen werden (Portal oder Azure CLI). Diese Rohdateien haben eine **sehr kurze lokale Aufbewahrung von 1 bis 7 Tagen** und sind primär für schnelle, manuelle Diagnose gedacht – nicht als Ersatz für eine systematische Log-Pipeline über Diagnostic Settings.
 
 ---
 
-## 7  Deployment & Lifecycle
-
-### 7.1  Deployment-Prozess für API-Definitionen
-
-- ⚑ **PFLICHT** – APIs dürfen **nicht manuell** über die APIM-Console in Produktion deployt werden – ausschließlich über die Azure-Pipelines-CI/CD.
-- ⚑ **PFLICHT** – **Azure Pipelines** ist die verbindliche CI/CD-Plattform; andere CI-Systeme sind nicht zugelassen.
-- ⚑ **PFLICHT** – API-Definitionen (JSON/YAML) müssen in einem Git-Repository (Azure Repos oder mit Azure DevOps verbundenes Git) versioniert sein (Single Source of Truth).
-
-Zugelassene Verfahren:
-
-| Verfahren | Einsatzgebiet | Bewertung |
-|---|---|---|
-| **Gravitee Management API via Azure Pipelines** | Pipeline ruft REST-Endpoints des Management API aus `azure-pipelines.yml` auf | **Standard** |
-| **Gravitee Kubernetes Operator (GKO)** | GitOps mit Custom Resources (CRDs); Sync via Argo CD oder Flux | **Bevorzugt bei Kubernetes-Workloads** |
-| Terraform-Provider | Für einzelne API-Definitionen **nicht zugelassen** (Community-Provider mit eingeschränkter Coverage) | Nicht empfohlen |
-
-- ⚑ **PFLICHT** – Pull-Request-Workflow: jede Änderung durchläuft einen Code-Review (mindestens 1 Approver aus dem Platform-Team für Prod-Deployments).
-- ✓ **EMPFOHLEN** – JSON-Schema-Validierung der API-Definition in der Pipeline.
-
-### 7.2  Azure Pipelines – Struktur & Konventionen
-
-Azure Pipelines ist die verbindliche CI/CD-Plattform für API-Deployments in Gravitee. Pro API-Definition existiert eine `azure-pipelines.yml` im jeweiligen Git-Repository.
-
-#### Pflichten
-
-- ⚑ **PFLICHT** – Pipeline-Definition als **Multi-Stage YAML** (`azure-pipelines.yml`) im API-Repository. Build- und Deployment-Stages liegen in derselben YAML-Datei. Classic Build/Release Pipelines sowie hybride Setups (YAML-Build + Classic-Release) sind nicht zugelassen.
-- ⚑ **PFLICHT** – Pipeline durchläuft folgende Stages in dieser Reihenfolge:
-
-| Stage | Zweck | Approval |
-|---|---|---|
-| `validate` | JSON-Schema-Validierung, Lint, OAS-Check | – |
-| `deploy_dev` | Deployment ins Dev-Environment via Management API | – |
-| `test_dev` | Smoke- und Integrationstests gegen Dev | – |
-| `deploy_staging` | Deployment ins Staging-Environment | Auto nach grünem Test |
-| `test_staging` | Vollständige QA, Quality-Score-Check | – |
-| `deploy_prod` | Deployment in Produktion | **Manuelles Approval (Platform-Team)** |
-
-- ⚑ **PFLICHT** – Pro Stage ein eigenes Azure DevOps **Environment** (`gravitee-dev`, `gravitee-staging`, `gravitee-prod`). Prod-Environment mit Approval-Gate konfiguriert.
-- ⚑ **PFLICHT** – Authentifizierung gegen die Gravitee Management API via **Azure DevOps Service Connection** (Generic / OAuth2); kein hartkodierter Token in der Pipeline.
-- ⚑ **PFLICHT** – Secrets (API-Tokens, Credentials) ausschließlich über **Azure Key Vault** + Variable Group; keine Secrets in YAML oder Repo-Variablen.
-- ⚑ **PFLICHT** – Jeder Pipeline-Run muss die **Trace-ID** des Deployments in den Gravitee-Audit-Log schreiben (Build-ID als Tag an die API-Definition).
-
-#### Empfehlungen
-
-- ✓ **EMPFOHLEN** – Wiederverwendbare **Pipeline-Templates** aus dem zentralen Templates-Repo des Platform-Teams nutzen (siehe Anhang 10.2).
-- ✓ **EMPFOHLEN** – **Branch Policies** in Azure Repos: PR-Validierung (`validate` + `deploy_dev`) muss vor Merge in `main` grün sein.
-- ✓ **EMPFOHLEN** – Pipeline-Caching für npm/Maven-Abhängigkeiten zur Schema-Validierung aktivieren.
-- ✓ **EMPFOHLEN** – Bei GKO-basiertem Deployment: Azure Pipeline pusht die CRDs ins Git-Repo, Argo CD/Flux übernehmen den Sync (GitOps-Pattern).
-
-#### Beispielstruktur `azure-pipelines.yml`
-
-```yaml
-trigger:
-  branches:
-    include: [ main, release/* ]
-
-variables:
-  - group: gravitee-secrets   # via Azure Key Vault
-
-stages:
-  - stage: validate
-    jobs:
-      - job: lint_and_schema
-        steps:
-          - script: npm ci && npm run validate:api
-
-  - stage: deploy_dev
-    dependsOn: validate
-    jobs:
-      - deployment: deploy
-        environment: gravitee-dev
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - template: templates/gravitee-deploy.yml@platform-templates
-
-  - stage: deploy_prod
-    dependsOn: test_staging
-    jobs:
-      - deployment: deploy
-        environment: gravitee-prod   # Approval-Gate konfiguriert
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - template: templates/gravitee-deploy.yml@platform-templates
-```
-
-#### Repo-Layout
-
-Jede API hat ein eigenes Git-Repository in Azure Repos. Verbindliches Grundlayout:
+## 4. Architekturübersicht (Textdiagramm)
 
 ```
-order-shipments-v2/
-├── README.md                       # Zweck, Owner, Slack-Channel, On-Call
-├── CODEOWNERS                      # Pflicht-Reviewer pro Pfad
-├── azure-pipelines.yml             # Multi-Stage Pipeline (validate → dev → staging → prod)
-├── api/
-│   ├── api-definition.json         # Gravitee API-Definition (v4)
-│   ├── openapi.yaml                # OpenAPI 3.x Spezifikation
-│   └── plans/                      # Plan-Konfigurationen (JWT, API-Key, ...)
-├── environments/
-│   ├── dev.vars.yml                # Endpoint-URLs, Tier, Rate Limits pro Env
-│   ├── staging.vars.yml            # KEINE Secrets - die kommen aus Azure Key Vault
-│   └── prod.vars.yml
-├── tests/
-│   ├── smoke/                      # Newman / Postman Collection für Smoke-Tests
-│   └── integration/                # Vollständige Integrationstests (z.B. k6, REST Assured)
-├── docs/
-│   ├── changelog.md                # API-Changelog (siehe REST API Styleguide)
-│   └── runbook.md                  # Operatives Runbook für On-Call
-└── .gitignore
+                         ┌───────────────────────────────────────────┐
+                         │  Azure Database for PostgreSQL             │
+                         │  Flexible Server                           │
+                         │  (Microsoft.DBforPostgreSQL/flexibleServers)│
+                         └───────────────┬─────────────────┬─────────┘
+                                         │                  │
+                     (immer aktiv,      │                  │ (opt-in, muss konfiguriert werden)
+                      kein Setup nötig) │                  │
+                                         ▼                  ▼
+                     ┌───────────────────────────┐   ┌─────────────────────────┐
+                     │ Azure Monitor Metrics      │   │ Diagnostic Settings     │
+                     │ (Plattformmetriken,        │   │ (Logs + optional        │
+                     │  93 Tage Retention,        │   │  AllMetrics-Export)     │
+                     │  PT1M/PT30M-Takt)           │   └────────┬────────────────┘
+                     └───────────┬─────────────────┘            │
+                                 │                               ├──────────────┬───────────────┐
+             ┌───────────────────┼──────────────────┐            ▼              ▼               ▼
+             ▼                   ▼                  ▼      Log Analytics   Storage Account   Event Hub
+      Metrics Explorer    Azure Monitor        Embedded         Workspace    (Archivierung)  (SIEM/Streaming,
+      (Ad-hoc-Analyse)    Alerts (Schwellwert)  Grafana-             │                          z. B. Splunk,
+                                                Dashboards            ▼                          Sumo Logic)
+                                                (Portal)        KQL-Abfragen,
+                                                                 Workbooks,
+                                                                 Troubleshooting
+                                                                 Guides
 ```
-
-| Element | Pflicht | Zweck |
-|---|---|---|
-| `README.md` | ⚑ | Owner, Kontakt, Slack-Channel, On-Call-Verweis |
-| `CODEOWNERS` | ⚑ | Automatische Reviewer-Zuweisung in PRs (Azure Repos) |
-| `azure-pipelines.yml` | ⚑ | Multi-Stage Pipeline (siehe oben) |
-| `api/api-definition.json` | ⚑ | Gravitee-API-Definition als Single Source of Truth |
-| `api/openapi.yaml` | ⚑ | OpenAPI 3.x (referenziert in Gravitee als Dokumentation) |
-| `environments/*.vars.yml` | ⚑ | Pro Environment getrennte Variablen |
-| `tests/smoke/` | ⚑ | Mindestens ein Smoke-Test, der in der Pipeline läuft |
-| `tests/integration/` | ✓ | Vollständige Tests |
-| `docs/runbook.md` | ✓ | Pflicht für Silver/Gold-APIs |
-
-- ⚑ **PFLICHT** – Keine Secrets, Tokens oder Credentials im Repo (auch nicht in `environments/*.vars.yml`). Alle sensiblen Werte über Azure Key Vault + Variable Group beziehen.
-- ⚑ **PFLICHT** – Repo-Name entspricht dem API-Namen aus Kap. 2.1 (`<domäne>-<ressource>-v<major>`).
-- ✓ **EMPFOHLEN** – Pre-Commit Hooks für lokale Schema-Validierung (`api-definition.json`, `openapi.yaml`).
-
-### 7.3  Environments
-
-- ⚑ **PFLICHT** – Drei Environments sind Pflicht: `dev`, `staging`, `prod`.
-- ⚑ **PFLICHT** – Promotion `dev → staging → prod` nur über definierte Approval-Prozesse.
-
-| Environment | Besonderheiten |
-|---|---|
-| `dev` | Keyless-Plans erlaubt, volle Logs, kein HA |
-| `staging` | Produktionsnahe Konfiguration, Integrationstests |
-| `prod` | Kein Keyless, minimale Logs, HA mit min. 2 Nodes, Redis Pflicht |
-
-### 7.4  Versionierung & Breaking Changes
-
-- ⚑ **PFLICHT** – Breaking Changes erfordern eine neue Major-Version (`v1` → `v2`) und einen neuen Context-Path.
-- ⚑ **PFLICHT** – Deprecation- und Sunset-Prozess (Fristen, Kommunikation, Sunset-Header) sind im REST API Styleguide geregelt:
-
-> `<Platzhalter: Link zum REST API Styleguide, Kapitel Deprecation & Versionierung>`
-
-- ⚑ **PFLICHT** – Sunset-Datum im API-Header technisch kommunizieren (gemäß REST API Styleguide):
-
-```
-Sunset: Sat, 01 Jan 2026 00:00:00 GMT
-Deprecation: true
-```
-
-- ✓ **EMPFOHLEN** – Konsumenten bei Deprecation automatisch per E-Mail benachrichtigen (APIM Subscription-Notification).
-
-### 7.5  Hybrid-spezifische Hinweise
-
-Im Hybrid-Deployment läuft der Gateway on-premise, die Control Plane (APIM Console, Developer Portal) als SaaS:
-
-- ⚑ **PFLICHT** – Gateway muss Outbound-Verbindung zur Gravitee Cloud Control Plane haben (Port 443).
-- ⚑ **PFLICHT** – API-Schlüssel und Subscriptions werden lokal gecacht – Sync-Intervall beachten (Standard: 5 Sekunden).
-- ✓ **EMPFOHLEN** – Lokale Redis-Instanz für Rate-Limit-Synchronisation zwischen Gateway-Nodes.
-- ✓ **EMPFOHLEN** – Netzwerk-Firewall-Regeln dokumentieren und regelmäßig reviewen.
 
 ---
 
-## 8  API Review & Quality Gate
+## 5. Zusammenfassende Entscheidungslogik für die Architektur
 
-### 8.1  Quality-Scoring (Gravitee APIM)
-
-Gravitee APIM bietet ein konfigurierbares Quality-Scoring:
-
-| Kriterium | Gewicht | Pflicht | Prüfung |
-|---|---|---|---|
-| Beschreibung vorhanden | 10 % | Ja | Automatisch |
-| OpenAPI-Spec hinterlegt | 20 % | Ja | Automatisch |
-| Min. 1 sicherer Plan | 25 % | Ja | Automatisch |
-| Rate Limit konfiguriert | 20 % | Ja | Automatisch |
-| Labels vollständig | 15 % | Ja | Manuell |
-| Health Check aktiv | 10 % | Ja | Automatisch |
-
-⚑ **PFLICHT** – Minimum Quality Score: **80 %** – APIs unterhalb dieses Wertes werden blockiert.
-
-### 8.2  Review-Checkliste (manuell)
-
-- [ ] Namenskonventionen eingehalten (Kap. 2)
-- [ ] Security-Policy korrekt konfiguriert (Kap. 3)
-- [ ] SLA-Tier zugewiesen und passend zur Nutzung (Kap. 4)
-- [ ] Rate Limits dem SLA-Tier entsprechend gesetzt (Kap. 5.1)
-- [ ] Health Check K8s-konform (Kap. 5.3)
-- [ ] W3C Trace Context Header werden weitergereicht (Kap. 6.2)
-- [ ] Keine sensitiven Daten in Logs oder Query-Parametern
-- [ ] Azure Pipeline (`azure-pipelines.yml`) vorhanden und getestet
-- [ ] Verantwortlicher Ansprechpartner hinterlegt
+| Anforderung | Empfohlener Pfad |
+|---|---|
+| CPU/Memory/Storage/IOPS-Überwachung, einfache Schwellwert-Alerts | Plattformmetriken (Baustein A), kein Diagnostic Setting nötig |
+| Verfügbarkeits-Monitoring | Metrik `is_db_alive` (Baustein A) |
+| Analyse einzelner langsamer Queries, Query-Text | Diagnostic Settings mit Query-Store-Kategorien (Baustein B), zusätzlich Query Store am Server aktivieren |
+| Autovacuum-Tuning | Sowohl Autovacuum-Plattformmetriken (Baustein A, muss aktiviert werden) als auch `PostgreSQLFlexTableStats`-Logs (Baustein B) je nach Detailtiefe |
+| Security-/Compliance-Audit, Verbindungs-/DDL-/DML-Nachvollziehbarkeit | Diagnostic Settings, Audit-Log-Kategorien, Ziel Log Analytics oder Event Hub für SIEM |
+| Langzeitarchivierung über Log-Analytics-Retention hinaus | Diagnostic Settings mit Ziel Storage Account |
+| Troubleshooting Guides im Portal nutzen | Diagnostic Settings zwingend erforderlich (Ziel Log Analytics), plus Query Store und Enhanced Metrics |
 
 ---
 
-## 9  Onboarding-Prozess für Producer-Teams
+## 6. Empfohlene Mindeststandards: Start vs. Produktivbetrieb
 
-| Schritt | Aktion |
+**Wichtiger Hinweis vorab:** Microsoft veröffentlicht keinen offiziellen, verbindlichen „Minimal-Standard" für Logging & Monitoring bei Flexible Server. Was folgt, ist daher **meine fachliche Einschätzung/Empfehlung** auf Basis der in Kapitel 1–5 beschriebenen, dokumentierten Mechanismen – keine von Microsoft vorgegebene Checkliste. Wo ich konkrete Werte nenne (z. B. Schwellwerte), sind das begründete Vorschläge, keine Herstellervorgaben; sie sind je nach Workload anzupassen.
+
+### 6.1 Minimalstandard zum Start (Dev/Test/erste Inbetriebnahme)
+
+Ziel in dieser Phase: möglichst wenig Setup-Aufwand und Zusatzkosten, aber genug Sichtbarkeit, um grobe Probleme nicht zu verpassen.
+
+| Bereich | Empfehlung |
 |---|---|
-| 1. Anfrage | Formular im internen Service-Katalog ausfüllen (Name, Domäne, SLA-Tier, Owner) |
-| 2. Template | Gravitee-API-Template (JSON/CRD) vom Platform-Team anfordern oder aus Git-Repo klonen |
-| 3. Konfiguration | Template anpassen: Endpoint, Policies, Labels, Plan gemäß diesem Styleguide |
-| 4. Validierung | Lokale Schema-Validierung; Import in Dev-Environment und Smoke-Test |
-| 5. Review | Pull Request im API-Definitions-Repo; Platform-Team reviewt |
-| 6. Staging | Nach Approval: automatisches Deployment nach Staging via Azure Pipelines |
-| 7. QA | Integrationstests und Quality-Score-Check in Staging |
-| 8. Produktion | Nach QA-Sign-off: Deployment in Prod via Azure Pipelines (manuelles Approval-Gate) |
+| Plattformmetriken (Baustein A) | Nichts zu konfigurieren – ist automatisch aktiv. Bei Bedarf ad hoc über Metrics Explorer ansehen. |
+| Enhanced/Autovacuum/PgBouncer-Metriken | Nicht aktivieren. In der Startphase i. d. R. nicht nötig, spart Aufwand. |
+| Diagnostic Settings (Baustein B) | Optional, kann in dieser Phase auch komplett entfallen. Falls doch gewünscht: eine einzige Diagnostic Setting mit Ziel Log Analytics Workspace (kleinste/günstigste Konfiguration), nur Kategorie `PostgreSQLLogs` (Server-Fehlerlog) – Query Store, Sessions, TableStats etc. weglassen. |
+| Alerts | Minimal zwei einfache, kostenlose Alerts: `is_db_alive` (Verfügbarkeit) und `storage_percent` (z. B. Schwelle 85 %, da volle Storage zu Schreibsperren führen kann). |
+| Server-Log-Inhalt (`log_*`-Parameter) | Defaults belassen. |
 
-### 9.1  Kontakt & Support
+### 6.2 Minimalstandard für eine Produktivdatenbank
 
-- **Slack:** `#platform-api-gateway`
-- **E-Mail:** `api-platform@<euer-unternehmen>.de`
-- **Ticket:** Jira-Projekt `APIGW`
+Das ist aus meiner Sicht die **untere Grenze dessen, was für eine produktiv genutzte Datenbank verantwortbar ist** – nicht die vollständige „Best Practice"-Ausstattung (die in Kapitel 5 skizzierten weitergehenden Szenarien wie Query-Store-Analyse oder SIEM-Anbindung gehen darüber hinaus und sind je nach Anforderung zusätzlich sinnvoll, aber nicht Teil dieses Minimalstandards).
+
+**a) Plattformmetriken (Baustein A) – Alerts mit Action Group**
+
+Alerts ohne Benachrichtigungsziel sind wirkungslos: Es sollte mindestens eine **Action Group** (E-Mail, Teams, PagerDuty o. ä.) konfiguriert sein, an die folgende Alerts gebunden sind:
+
+| Metrik | Grund |
+|---|---|
+| `is_db_alive` | Basis-Verfügbarkeit |
+| `storage_percent` | Volllaufender Storage kann zu Schreibsperren führen – kritisch |
+| `cpu_percent` | Anhaltend hohe CPU-Last als Frühindikator für Performance-Probleme |
+| `memory_percent` | Speicherdruck, potenzielle OOM-Situationen |
+| `active_connections` (relativ zu `max_connections`) | Drohende Verbindungserschöpfung |
+| `connections_failed` | Deutet auf Konfigurations- oder Kapazitätsprobleme hin |
+
+**b) Autovacuum-Metriken aktivieren**
+
+`metrics.autovacuum_diagnostics = ON`. Begründung: Bei einer produktiven Datenbank mit laufendem Schreibverkehr ist unbemerktes Table-Bloat bzw. ein sich näherndes Transaction-ID-Wraparound (siehe Kapitel 2.3) ein reales Betriebsrisiko, das ohne diese Metriken erst spät sichtbar wird. Ich stufe das als **Minimalstandard**, nicht als optionales Extra ein.
+
+**c) PgBouncer-Metriken – bedingt**
+
+Nur relevant, falls PgBouncer tatsächlich genutzt wird (`pgbouncer.enabled = ON`). Wenn ja: `metrics.pgbouncer_diagnostics = ON` ebenfalls als Minimalstandard, da sonst ein saturierter Pool unbemerkt bleibt.
+
+**d) Diagnostic Settings (Baustein B) – minimal produktiv-tauglicher Umfang**
+
+- Ziel: **Log Analytics Workspace**, Collection Mode **„Resource specific" (`Dedicated`)** (siehe Kapitel 3.3) – der Mehraufwand gegenüber „Azure diagnostics" ist beim Einrichten praktisch null, der Nutzen bei der späteren Abfrage aber deutlich höher.
+- Minimal sinnvolle Log-Kategorien:
+  - `PostgreSQLLogs` (Server-Fehler-/Verbindungslog) – Basis-Diagnose
+  - `PostgreSQLFlexDatabaseXacts` (Transaction-ID-/Wraparound-Frühwarnung) – ergänzt die Autovacuum-Metriken um die konkrete Wraparound-Distanz
+- **Nicht** zwingend Teil des Minimalstandards, aber naheliegende nächste Ausbaustufe: Query-Store-Kategorien (`PostgreSQLFlexQueryStoreRuntime`, `PostgreSQLFlexQueryStoreWaitStats`, `PostgreSQLQueryStoreSqlText`) für Performance-Diagnose einzelner Queries, sowie `PostgreSQLFlexSessions`. Diese würde ich als „empfehlenswert, aber nicht minimal" einordnen.
+- `AllMetrics`-Export in denselben Workspace: sinnvoll, sobald Trendanalysen über mehr als 30 Tage gebraucht werden (siehe Kapitel 2.1); für den reinen Minimalstandard nicht zwingend.
+
+**e) Server-Log-Inhalt (`log_*`-Parameter)**
+
+Für eine produktive Datenbank sollten mindestens folgende, in PostgreSQL allgemein gebräuchliche Logging-Parameter gesetzt sein, damit `PostgreSQLLogs` überhaupt aussagekräftigen Inhalt liefert (Hinweis: Das sind Standard-PostgreSQL-Parameter, keine Azure-spezifischen Einstellungen):
+- `log_connections` / `log_disconnections` = `ON` – wer verbindet sich wann
+- `log_lock_waits` = `ON` – Hinweise auf Sperr-/Deadlock-Situationen
+- `log_min_duration_statement` – langsame Queries protokollieren (konkreter Schwellwert ist workload-abhängig; ich nenne hier bewusst keinen pauschalen Millisekundenwert, da das ohne Kenntnis eurer Workload eine unbegründete Zahl wäre)
+- `log_checkpoints` = `ON` – Checkpoint-Verhalten, relevant für I/O-Analyse
+
+**f) Troubleshooting Guides**
+
+Da diese laut Kapitel 3.5 zwingend Diagnostic Settings (Log Analytics) sowie Query Store voraussetzen, sind sie **kein Bestandteil des Minimalstandards**, sondern setzen bereits eine über den Minimalstandard hinausgehende Konfiguration voraus – wer sie nutzen möchte, muss die Query-Store-Kategorien aus Punkt (d) mit einrichten.
+
+### 6.3 Kurzer Vergleich
+
+| | Start-Minimalstandard | Produktiv-Minimalstandard |
+|---|---|---|
+| Diagnostic Settings | optional | verpflichtend (Log Analytics, Resource specific) |
+| Log-Kategorien | ggf. nur `PostgreSQLLogs` | `PostgreSQLLogs` + `PostgreSQLFlexDatabaseXacts` |
+| Autovacuum-Metriken | aus | an |
+| Alerts | 2 (Verfügbarkeit, Storage) | 6 (siehe Tabelle 6.2a), mit Action Group |
+| `log_*`-Serverparameter | Default | angepasst (Connections, Lock Waits, langsame Queries, Checkpoints) |
 
 ---
 
-## 10  Anhang
+## 7. Konfiguration als Code: Terraform
 
-### 10.1  Schnell-Referenz Pflichtanforderungen
+**Grundsätzliche Antwort: Ja**, sämtliche in dieser Architektur beschriebenen Bausteine lassen sich über den `azurerm`-Provider (HashiCorp Terraform bzw. OpenTofu) deklarativ verwalten. Es gibt keinen Bestandteil dieser Architektur, der zwingend manuell im Portal konfiguriert werden müsste.
 
-| Kategorie | Pflichtanforderungen (Kurzübersicht) |
-|---|---|
-| **Naming** | Schema `<domäne>-<ressource>-v<major>` · Context-Path mit `/v<major>` · OAS-Spec |
-| **Sicherheit** | Kein Keyless in Prod · JWT: RS256/ES256 · Kein Auto-Approve · CORS-Whitelist |
-| **SLA** | SLA-Tier zugewiesen · Werte gemäß Tier-Matrix · On-Call für Silver/Gold |
-| **Traffic** | Rate Limit pro Plan · Health Check K8s-konform · TLS für Backend-Verbindungen |
-| **Tracing** | W3C `traceparent` / `tracestate` durchreichen · OpenTelemetry-konforme Logs |
-| **Logging** | Kein Full-Log in Prod · Trace-ID in Logs übernehmen |
-| **Deployment** | Kein manuelles Deployment in Prod · Git-Versionierung · 3 Environments · Azure Pipelines (Multi-Stage YAML) · Management API oder GKO |
-| **Quality Gate** | Min. 80 % Quality Score · Manuelle Review-Checkliste bestanden |
+### 7.1 Relevante Terraform-Ressourcen
 
-### 10.2  Weiterführende Dokumentation
-
-| Ressource | Link / Pfad |
-|---|---|
-| **REST API Styleguide (intern)** | `<Platzhalter: Link zum REST API Styleguide>` |
-| Gravitee APIM Dokumentation | <https://documentation.gravitee.io/apim> |
-| Production Best Practices | <https://documentation.gravitee.io/apim/prepare-a-production-environment> |
-| Gravitee Management API Referenz | <https://documentation.gravitee.io/apim/reference/management-api> |
-| Gravitee Kubernetes Operator (GKO) | <https://documentation.gravitee.io/gravitee-kubernetes-operator-gko> |
-| W3C Trace Context Standard | <https://www.w3.org/TR/trace-context/> |
-| OpenTelemetry Specification | <https://opentelemetry.io/docs/specs/otel/> |
-| Kubernetes Probes Doku | <https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/> |
-| Azure Pipelines Dokumentation | <https://learn.microsoft.com/azure/devops/pipelines/> |
-| API-Definitions Git-Repo (Azure Repos) | `<interne URL>` |
-| Azure Pipelines Templates (Platform-Team) | `<interner Repo-Pfad: platform-templates>` |
-
-### 10.3  Glossar
-
-| Begriff | Bedeutung |
-|---|---|
-| **SLA** | Service Level Agreement – Zusage über Servicequalität (Verfügbarkeit, Latenz, Support) |
-| **SLO** | Service Level Objective – internes Ziel, an dem das SLA gemessen wird |
-| **SLI** | Service Level Indicator – konkrete Metrik (z. B. P95-Latenz) |
-| **Error Budget** | Erlaubter Anteil fehlgeschlagener Requests pro Zeitfenster (= 100 % – SLO) |
-| **GKO** | Gravitee Kubernetes Operator |
-| **OAS** | OpenAPI Specification |
-| **OTLP** | OpenTelemetry Protocol |
-| **P50/P95/P99** | Perzentile der Antwortzeitverteilung |
-
-### 10.4  Incident-Klassifizierung
-
-| Priorität | Beschreibung | Beispiele |
+| Zweck | Terraform-Ressource | Bemerkung |
 |---|---|---|
-| **P1** | Produktions-Ausfall, hoher Geschäftsimpact | API komplett down, Datenverlust, Security-Breach |
-| **P2** | Eingeschränkte Funktionalität, mittlerer Impact | Hohe Fehlerrate, Latenz weit über SLA |
-| **P3** | Geringer Impact, kein Workaround nötig | Einzelne Endpoints betroffen, kosmetische Fehler |
+| PostgreSQL-Flexible-Server selbst | `azurerm_postgresql_flexible_server` | Basisressource (SKU, Storage, HA, Netzwerk, Backup) |
+| Server-Parameter / Feature-Flags (die in Kapitel 2.3 genannten Schalter) | `azurerm_postgresql_flexible_server_configuration` | Ein Ressourcenblock je Parameter, z. B. `metrics.autovacuum_diagnostics`, `metrics.pgbouncer_diagnostics`, `pgbouncer.enabled`, `metrics.collector_database_activity`, sowie die `log_*`-Parameter, die den Inhalt von `PostgreSQLLogs` steuern |
+| Diagnostic Settings (Baustein B) | `azurerm_monitor_diagnostic_setting` | Über `enabled_log { category = "..." }`-Blöcke je Log-Kategorie und `enabled_metric { category = "AllMetrics" }` für den Metrik-Export |
+| Log Analytics Workspace als Ziel | `azurerm_log_analytics_workspace` | Inkl. `retention_in_days` für die Aufbewahrung jenseits der 93-Tage-Grenze aus Kapitel 2.1 |
+| Metrikbasierte Alerts | `azurerm_monitor_metric_alert` | Für Schwellwert-Alerts auf Plattformmetriken (Baustein A) |
+| Log-/KQL-basierte Alerts | `azurerm_monitor_scheduled_query_rules_alert_v2` | Für Alerts auf Basis von KQL-Abfragen gegen Log Analytics (Baustein B) |
 
-### 10.5  Änderungshistorie
+Beispielhafter Ausschnitt (vereinfacht, zur Orientierung – kein vollständiges, produktionsreifes Modul):
 
-| Version | Datum | Änderung |
+```hcl
+resource "azurerm_postgresql_flexible_server_configuration" "autovacuum_metrics" {
+  name      = "metrics.autovacuum_diagnostics"
+  server_id = azurerm_postgresql_flexible_server.this.id
+  value     = "ON"
+}
+
+resource "azurerm_monitor_diagnostic_setting" "pg" {
+  name                       = "pg-diagnostics"
+  target_resource_id         = azurerm_postgresql_flexible_server.this.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
+
+  enabled_log {
+    category = "PostgreSQLLogs"
+  }
+  enabled_log {
+    category = "PostgreSQLFlexTableStats"
+  }
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+```
+
+### 7.2 Bekannte Einschränkungen und Fallstricke (dokumentiert, nicht spekulativ)
+
+- **Nebenläufige Änderungen an Server-Parametern:** In der Praxis wurde in einem öffentlichen GitHub-Issue zum `azurerm`-Provider berichtet, dass beim gleichzeitigen Setzen mehrerer `azurerm_postgresql_flexible_server_configuration`-Ressourcen über eine `for_each`-Schleife sporadisch ein `ServerBusy`-Fehler der Azure-API auftritt. Das ist kein grundsätzliches Terraform-Problem, sondern ein bekanntes, gemeldetes Verhalten bei parallelen Konfigurationsänderungen an derselben Server-Instanz. Empfehlenswert ist, entweder Wiederholungslogik (Retries) einzuplanen oder die Parameteränderungen zu serialisieren (z. B. über `depends_on`).
+- **Fertige Module:** Es existieren sowohl ein von Microsoft mitgetragenes Azure-Verified-Module (`Azure/terraform-azurerm-avm-res-dbforpostgresql-flexibleserver`) als auch Community-Module (z. B. von Claranet), die Server, Konfiguration und Diagnostic Settings gebündelt bereitstellen. Ich habe diese Module nicht im Detail auf Vollständigkeit geprüft; vor Produktivnutzung empfiehlt sich ein eigener Blick in die jeweilige Modul-Dokumentation.
+
+### 7.3 Was ich dazu nicht mit Sicherheit sagen kann
+
+- Ob **jede einzelne** in Kapitel 3.2 gelistete Log-Kategorie und jeder Enhanced-Metrics-Parameter zum aktuellen Zeitpunkt bereits vollständig und ohne Provider-Lücken über `azurerm` abbildbar ist, kann ich nicht abschließend bestätigen – neue Azure-Features (insbesondere Preview-Funktionen wie `tps` oder `logical_replication_slot_sync_status`) werden erfahrungsgemäß mit einiger Verzögerung im Provider nachgezogen. Dazu habe ich keine vollständig gesicherte, aktuelle Information; im Zweifel vor der Planung die Provider-Dokumentation bzw. das Änderungsprotokoll (Changelog) des `azurerm`-Providers prüfen.
+- Konkrete Versionsanforderungen an den `azurerm`-Provider für einzelne der genannten Parameter nenne ich hier bewusst nicht, da sich Mindestversionen häufig ändern und ich das nicht zuverlässig aktuell verifizieren kann.
+
+### 7.4 Anpassung bei Private Endpoint / AMPLS
+
+**Zentrale Erkenntnis:** Der Diagnostic-Settings-Traffic (PostgreSQL-Flexible-Server → Log Analytics Workspace) läuft laut Microsoft-Dokumentation über einen „secure private Microsoft channel" und wird von den AMPLS-Zugriffsmodi (`ingestionAccessMode`/`queryAccessMode`) **nicht** kontrolliert. Die Diagnostic Setting selbst (Kapitel 7.1) bleibt deshalb **unverändert** – sie zeigt weiterhin direkt auf `log_analytics_workspace_id`, unabhängig davon, ob Private Endpoint/AMPLS im Einsatz sind.
+
+Relevant wird die private Netzwerk-Architektur nur für die **Abfrage-Seite**: KQL-Abfragen, Workbooks und Troubleshooting Guides sollen ebenfalls privat laufen, statt über die öffentliche Internetanbindung des Log Analytics Workspace. Dafür ist eine zusätzliche Ressource nötig – die Aufnahme des Workspace als „Scoped Service" in die bestehende AMPLS.
+
+**Betroffen, aber nicht Teil dieses Logging-Moduls:**
+
+| Ressource | Betroffen? | Anpassung nötig? |
 |---|---|---|
-| 1.0 | – | Initiale Version |
-| 1.1 | – | Logging auf W3C Trace Context / OpenTelemetry umgestellt; Terraform-Nutzung präzisiert; Verweis auf REST API Styleguide ergänzt |
-| 1.2 | – | Neues Kap. 4 SLA-Tiers & Service Levels; Wartungsfenster erklärt; Health Check um K8s-Kontext erweitert; Deprecation-Frist als Verweis auf REST API Styleguide; Glossar und Incident-Klassifizierung ergänzt |
-| 1.3 | – | Azure Pipelines als verbindliche CI/CD-Plattform; neuer Abschnitt 7.2 zu Pipeline-Struktur, Stages, Approval-Gates und Service Connections; Folgeabschnitte renummeriert |
-| 1.4 | – | Multi-Stage YAML als Pflicht präzisiert; verbindliches Repo-Layout (azure-pipelines.yml, api/, environments/, tests/, docs/) in 7.2 ergänzt; Kapitel "Infrastructure as Code" entfernt; Folgekapitel renummeriert |
+| `azurerm_postgresql_flexible_server` (der DB-Server mit eigenem Private Endpoint) | Netzwerktechnisch ja, für Logging **nein** | Keine Änderung nötig – die Diagnostic Setting funktioniert unabhängig vom Networking-Modus des Servers. **Unabhängiger Nebenhinweis:** Laut Dokumentation werden Private Endpoints aktuell **nicht unterstützt bei Servern, die mit VNet-Integration (delegiertes Subnetz) erstellt wurden** – nur bei Servern mit Networking-Modus „Public access" (öffentlicher Zugriff deaktiviert) plus zusätzlichem Private Endpoint. Falls der Server ursprünglich mit VNet-Integration angelegt wurde, ist reiner Private-Endpoint-Betrieb nur über eine laut den gefundenen Quellen noch als Preview markierte Migration möglich – unabhängig vom Logging-Thema zu prüfen. |
+| `azurerm_private_endpoint` (Ziel: AMPLS, Subresource `azuremonitor`) | Ja, aber vermutlich bereits vorhanden | Da die AMPLS laut Aussage bereits im Einsatz ist, gehe ich davon aus, dass der zugehörige Private Endpoint schon existiert. Falls nicht: Diese Ressource fehlt dann noch und wurde hier bewusst nicht neu angelegt, um keine Dopplung zu riskieren. |
 
+**Vollständiges Codebeispiel: Minimaler Produktivstandard (Kapitel 6.2) mit Private-Endpoint-/AMPLS-Anpassung**
+
+```hcl
+############################################
+# Variablen
+############################################
+
+variable "enable_pgbouncer" {
+  type    = bool
+  default = false
+  # Nur auf true setzen, wenn PgBouncer tatsaechlich genutzt wird (Kapitel 6.2c)
+}
+
+variable "log_min_duration_statement_ms" {
+  type        = number
+  default     = 1000
+  description = "Schwellwert in ms fuer 'langsame Queries'. Workload-abhaengig, unbedingt anpassen -- 1000 ms ist nur ein Startwert, kein Microsoft-Vorgabewert."
+}
+
+variable "storage_alert_threshold_percent" {
+  type    = number
+  default = 85
+}
+
+variable "cpu_alert_threshold_percent" {
+  type    = number
+  default = 90
+}
+
+variable "memory_alert_threshold_percent" {
+  type    = number
+  default = 90
+}
+
+variable "active_connections_alert_threshold" {
+  type        = number
+  default     = 0
+  description = "Absoluter Schwellwert fuer active_connections. MUSS manuell anhand von max_connections der gewaehlten SKU gesetzt werden -- 0 ist ein Platzhalter, kein Produktivwert."
+}
+
+############################################
+# Datenquellen (vorausgesetzt vorhanden)
+############################################
+
+data "azurerm_postgresql_flexible_server" "this" {
+  name                = "mein-pg-server"
+  resource_group_name = "rg-database"
+}
+
+data "azurerm_monitor_private_link_scope" "this" {
+  name                = "ampls-shared"
+  resource_group_name = "rg-networking-shared"
+}
+
+############################################
+# 1) Log Analytics Workspace
+############################################
+
+resource "azurerm_log_analytics_workspace" "pg" {
+  name                = "log-pg-prod"
+  location            = "westeurope"
+  resource_group_name = "rg-monitoring"
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+
+  internet_ingestion_enabled = true   # siehe Unsicherheitshinweis unten
+  internet_query_enabled     = false  # Abfragen nur noch privat ueber die AMPLS
+}
+
+############################################
+# 2) Diagnostic Setting -- unveraendert durch Private Endpoint/AMPLS
+############################################
+
+resource "azurerm_monitor_diagnostic_setting" "pg" {
+  name                            = "pg-diagnostics-prod"
+  target_resource_id              = data.azurerm_postgresql_flexible_server.this.id
+  log_analytics_workspace_id      = azurerm_log_analytics_workspace.pg.id
+  log_analytics_destination_type  = "Dedicated"
+
+  enabled_log {
+    category = "PostgreSQLLogs"
+  }
+  enabled_log {
+    category = "PostgreSQLFlexDatabaseXacts"
+  }
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
+############################################
+# 3) NEU wegen AMPLS: Workspace als Scoped Service eintragen
+############################################
+
+resource "azurerm_monitor_private_link_scoped_service" "pg_law" {
+  name                = "pg-law-scoped-service"
+  resource_group_name = "rg-networking-shared"
+  scope_name          = data.azurerm_monitor_private_link_scope.this.name
+  linked_resource_id  = azurerm_log_analytics_workspace.pg.id
+}
+
+############################################
+# 4) Server-Parameter: Autovacuum-Metriken (Kapitel 6.2b)
+############################################
+
+resource "azurerm_postgresql_flexible_server_configuration" "autovacuum_metrics" {
+  name      = "metrics.autovacuum_diagnostics"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "ON"
+}
+
+############################################
+# 5) Server-Parameter: log_*-Einstellungen (Kapitel 6.2e)
+############################################
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_connections" {
+  name      = "log_connections"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_disconnections" {
+  name      = "log_disconnections"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_lock_waits" {
+  name      = "log_lock_waits"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_checkpoints" {
+  name      = "log_checkpoints"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_min_duration_statement" {
+  name      = "log_min_duration_statement"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = tostring(var.log_min_duration_statement_ms)
+}
+
+############################################
+# 6) PgBouncer -- bedingt (Kapitel 6.2c), nur falls genutzt
+############################################
+
+resource "azurerm_postgresql_flexible_server_configuration" "pgbouncer_enabled" {
+  count     = var.enable_pgbouncer ? 1 : 0
+  name      = "pgbouncer.enabled"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "true"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "pgbouncer_metrics" {
+  count     = var.enable_pgbouncer ? 1 : 0
+  name      = "metrics.pgbouncer_diagnostics"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "ON"
+
+  depends_on = [azurerm_postgresql_flexible_server_configuration.pgbouncer_enabled]
+}
+
+############################################
+# 7) Action Group
+############################################
+
+resource "azurerm_monitor_action_group" "pg" {
+  name                = "ag-pg-prod"
+  resource_group_name = "rg-monitoring"
+  short_name          = "pg-prod"
+
+  email_receiver {
+    name          = "ops-team"
+    email_address = "ops@example.com"
+  }
+}
+
+############################################
+# 8) Alerts -- alle 6 aus Kapitel 6.2a
+#    Aggregation-Werte vor dem Apply gegen die Microsoft-Referenz
+#    "Supported metrics" pruefen (Kapitel 2.2).
+############################################
+
+resource "azurerm_monitor_metric_alert" "is_db_alive" {
+  name                = "alert-pg-availability"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 0
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "is_db_alive"
+    aggregation      = "Average"
+    operator         = "LessThan"
+    threshold        = 1
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "storage" {
+  name                = "alert-pg-storage"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 1
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "storage_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.storage_alert_threshold_percent
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "cpu" {
+  name                = "alert-pg-cpu"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "cpu_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.cpu_alert_threshold_percent
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "memory" {
+  name                = "alert-pg-memory"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "memory_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.memory_alert_threshold_percent
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "active_connections" {
+  name                = "alert-pg-active-connections"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "active_connections"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.active_connections_alert_threshold
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+
+  # Hinweis: absoluter Schwellwert, keine echte Ratio
+  # active_connections/max_connections -- ein Standard-Metrik-Alert
+  # kann keine Ratio zwischen zwei Metriken bilden. Fuer eine echte
+  # relative Schwelle waere ein log-/KQL-basierter Alert
+  # (azurerm_monitor_scheduled_query_rules_alert_v2) noetig -- das
+  # geht ueber den hier definierten Minimalstandard hinaus.
+}
+
+resource "azurerm_monitor_metric_alert" "connections_failed" {
+  name                = "alert-pg-connections-failed"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "connections_failed"
+    aggregation      = "Total"
+    operator         = "GreaterThan"
+    threshold        = 5
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+```
+
+**Unsicherheitspunkt, der bewusst nicht verschwiegen wird:** Für `internet_ingestion_enabled` wurde hier `true` gewählt statt `false`. Es gibt eine klare Quelle dafür, dass die **AMPLS-Zugriffsmodi** die Diagnostic-Settings-Ingestion nicht beeinflussen. Ob das Setzen von `internet_ingestion_enabled = false` **direkt am Workspace** (eine andere, workspace-eigene Netzwerkeinstellung) die Diagnostic-Settings-Ingestion ebenfalls unberührt lässt, konnte ich **nicht mit einer eindeutigen Quelle bestätigen**. Vor einer vollständigen Umstellung auf privat sollte das in einer Testumgebung verifiziert werden.
+
+---
+
+## 8. Offene Punkte / bewusst nicht beantwortet
+
+Zu folgenden Aspekten liegen mir **keine gesicherten, aktuellen Informationen** vor und ich habe daher nichts erfunden:
+
+- **Konkrete Kostenmodelle**: Wie viel der Export bestimmter Log-Kategorien über Diagnostic Settings pro GB kostet, hängt vom gewählten Log-Analytics-Tarif, Region und aktuellem Preismodell ab. Dazu habe ich keine gesicherten aktuellen Preisinformationen – bitte den Azure-Preisrechner konsultieren.
+- **Genaue Default-Aufbewahrungsdauer eines neu angelegten Log Analytics Workspace** in eurer konkreten Umgebung (abhängig von Tarif/Konfiguration) – dazu kann ich ohne Kenntnis eurer Workspace-Konfiguration keine verbindliche Aussage treffen.
+- **Verhalten/Vollständigkeit bei sehr neuen Preview-Metriken** (z. B. `tps`, `bloat_percent`, `logical_replication_slot_sync_status`) – diese sind als Preview gekennzeichnet und können sich in Verhalten oder Verfügbarkeit noch ändern.
+- **Terraform-Provider-Abdeckung im Detail** (siehe Kapitel 7.3).
+
+## 9. Quellen (Microsoft Learn, abgerufen Juli 2026)
+
+- Monitor using Metrics and Logs in Azure Database for PostgreSQL flexible server: https://learn.microsoft.com/en-us/azure/postgresql/monitor/concepts-monitoring
+- Configure and access logs: https://learn.microsoft.com/en-us/azure/postgresql/monitor/how-to-configure-and-access-logs
+- Supported metrics – Microsoft.DBforPostgreSQL/flexibleServers: https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-dbforpostgresql-flexibleservers-metrics
+- Supported logs – Microsoft.DBforPostgreSQL/flexibleServers: https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-logs/microsoft-dbforpostgresql-flexibleservers-logs
+- Monitor by using Azure Monitor workbooks: https://learn.microsoft.com/en-us/azure/postgresql/monitor/concepts-workbooks
+- Troubleshooting guides – Azure portal: https://docs.azure.cn/en-us/postgresql/flexible-server/how-to-troubleshooting-guides
+- Autovacuum Tuning – Azure Database for PostgreSQL: https://learn.microsoft.com/en-us/azure/postgresql/troubleshoot/how-to-autovacuum-tuning
+- Terraform-Provider `azurerm_postgresql_flexible_server`: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server
+- Azure Verified Module für PostgreSQL Flexible Server (Terraform): https://github.com/Azure/terraform-azurerm-avm-res-dbforpostgresql-flexibleserver
+- Bekanntes Issue zu paralleler Konfiguration (`ServerBusy`): https://github.com/hashicorp/terraform-provider-azurerm/issues/27332
+- Diagnostic Settings in Azure Monitor (Collection Mode, Resource specific vs. Azure diagnostics): https://learn.microsoft.com/en-us/azure/azure-monitor/platform/diagnostic-settings
+- Terraform-Ressource `azurerm_monitor_diagnostic_setting`: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/monitor_diagnostic_setting
+- Bekanntes Issue zu `log_analytics_destination_type`-Drift: https://github.com/hashicorp/terraform-provider-azurerm/pull/20203
+- PgBouncer in Azure Database for PostgreSQL flexible server (Funktionsweise, Port, Einschränkungen): https://learn.microsoft.com/en-us/azure/postgresql/connectivity/concepts-pgbouncer
+- Design Azure Monitor Private Link configuration (Access Modes, Ausnahme für Diagnostic Settings): https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/private-link-design
+- Use Azure Private Link to connect networks to Azure Monitor: https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/private-link-security
+- Terraform-Ressource `azurerm_monitor_private_link_scope`: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/monitor_private_link_scope
+- Terraform-Ressource `azurerm_monitor_private_link_scoped_service`: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/monitor_private_link_scoped_service
+- Networking Overview with Private Link Connectivity – Azure Database for PostgreSQL (Einschränkung VNet-Integration vs. Private Endpoint): https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private-link
 
