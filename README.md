@@ -766,3 +766,326 @@ Zu folgenden Aspekten liegen mir **keine gesicherten, aktuellen Informationen** 
 - Terraform-Ressource `azurerm_monitor_private_link_scoped_service`: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/monitor_private_link_scoped_service
 - Networking Overview with Private Link Connectivity – Azure Database for PostgreSQL (Einschränkung VNet-Integration vs. Private Endpoint): https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private-link
 
+
+
+
+
+
+############################################
+# Variablen
+############################################
+
+variable "enable_pgbouncer" {
+  type    = bool
+  default = false
+  # Nur auf true setzen, wenn PgBouncer tatsächlich genutzt wird (Kapitel 6.2c)
+}
+
+variable "log_min_duration_statement_ms" {
+  type        = number
+  default     = 1000
+  description = "Schwellwert in ms fuer 'langsame Queries' im PostgreSQLLogs-Log. Workload-abhaengig, unbedingt anpassen -- 1000 ms ist nur ein Startwert, kein Microsoft-Vorgabewert."
+}
+
+variable "storage_alert_threshold_percent" {
+  type    = number
+  default = 85
+}
+
+variable "cpu_alert_threshold_percent" {
+  type    = number
+  default = 90
+}
+
+variable "memory_alert_threshold_percent" {
+  type    = number
+  default = 90
+}
+
+variable "active_connections_alert_threshold" {
+  type        = number
+  default     = 0
+  description = "Absoluter Schwellwert fuer active_connections. MUSS manuell anhand von max_connections eurer gewaehlten SKU gesetzt werden (siehe Hinweis unten) -- 0 ist ein Platzhalter, kein sinnvoller Produktivwert."
+}
+
+############################################
+# Datenquellen (vorausgesetzt vorhanden)
+############################################
+
+data "azurerm_postgresql_flexible_server" "this" {
+  name                = "mein-pg-server"
+  resource_group_name = "rg-database"
+}
+
+data "azurerm_monitor_private_link_scope" "this" {
+  name                = "ampls-shared"
+  resource_group_name = "rg-networking-shared"
+}
+
+############################################
+# 1) Log Analytics Workspace
+############################################
+
+resource "azurerm_log_analytics_workspace" "pg" {
+  name                = "log-pg-prod"
+  location            = "westeurope"
+  resource_group_name = "rg-monitoring"
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+
+  internet_ingestion_enabled = true   # siehe Unsicherheitshinweis in Kapitel 7.4
+  internet_query_enabled     = false  # Abfragen nur noch privat ueber die AMPLS
+}
+
+############################################
+# 2) Diagnostic Setting (unveraendert durch Private Endpoint/AMPLS)
+############################################
+
+resource "azurerm_monitor_diagnostic_setting" "pg" {
+  name                            = "pg-diagnostics-prod"
+  target_resource_id              = data.azurerm_postgresql_flexible_server.this.id
+  log_analytics_workspace_id      = azurerm_log_analytics_workspace.pg.id
+  log_analytics_destination_type  = "Dedicated"
+
+  enabled_log {
+    category = "PostgreSQLLogs"
+  }
+  enabled_log {
+    category = "PostgreSQLFlexDatabaseXacts"
+  }
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
+############################################
+# 3) AMPLS-Scoped-Service fuer den Workspace
+############################################
+
+resource "azurerm_monitor_private_link_scoped_service" "pg_law" {
+  name                = "pg-law-scoped-service"
+  resource_group_name = "rg-networking-shared"
+  scope_name          = data.azurerm_monitor_private_link_scope.this.name
+  linked_resource_id  = azurerm_log_analytics_workspace.pg.id
+}
+
+############################################
+# 4) Server-Parameter: Autovacuum-Metriken (Kapitel 6.2b)
+############################################
+
+resource "azurerm_postgresql_flexible_server_configuration" "autovacuum_metrics" {
+  name      = "metrics.autovacuum_diagnostics"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "ON"
+}
+
+############################################
+# 5) Server-Parameter: log_*-Einstellungen (Kapitel 6.2e)
+############################################
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_connections" {
+  name      = "log_connections"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_disconnections" {
+  name      = "log_disconnections"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_lock_waits" {
+  name      = "log_lock_waits"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_checkpoints" {
+  name      = "log_checkpoints"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_min_duration_statement" {
+  name      = "log_min_duration_statement"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = tostring(var.log_min_duration_statement_ms)
+}
+
+############################################
+# 6) PgBouncer -- bedingt (Kapitel 6.2c), nur falls genutzt
+############################################
+
+resource "azurerm_postgresql_flexible_server_configuration" "pgbouncer_enabled" {
+  count     = var.enable_pgbouncer ? 1 : 0
+  name      = "pgbouncer.enabled"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "true"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "pgbouncer_metrics" {
+  count     = var.enable_pgbouncer ? 1 : 0
+  name      = "metrics.pgbouncer_diagnostics"
+  server_id = data.azurerm_postgresql_flexible_server.this.id
+  value     = "ON"
+
+  depends_on = [azurerm_postgresql_flexible_server_configuration.pgbouncer_enabled]
+}
+
+############################################
+# 7) Action Group
+############################################
+
+resource "azurerm_monitor_action_group" "pg" {
+  name                = "ag-pg-prod"
+  resource_group_name = "rg-monitoring"
+  short_name          = "pg-prod"
+
+  email_receiver {
+    name          = "ops-team"
+    email_address = "ops@example.com"
+  }
+}
+
+############################################
+# 8) Alerts -- alle 6 aus Kapitel 6.2a
+#    Hinweis: aggregation-Werte vor dem Apply gegen die
+#    Microsoft-Referenz "Supported metrics" pruefen (Kapitel 2.2) --
+#    eine falsche Metrik/Aggregations-Kombination wird von der
+#    Azure-API abgelehnt.
+############################################
+
+resource "azurerm_monitor_metric_alert" "is_db_alive" {
+  name                = "alert-pg-availability"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 0
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "is_db_alive"
+    aggregation      = "Average"
+    operator         = "LessThan"
+    threshold        = 1
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "storage" {
+  name                = "alert-pg-storage"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 1
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "storage_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.storage_alert_threshold_percent
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "cpu" {
+  name                = "alert-pg-cpu"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "cpu_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.cpu_alert_threshold_percent
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "memory" {
+  name                = "alert-pg-memory"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "memory_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.memory_alert_threshold_percent
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "active_connections" {
+  name                = "alert-pg-active-connections"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "active_connections"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = var.active_connections_alert_threshold
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+
+  # WICHTIGER HINWEIS: Das ist ein absoluter Schwellwert, keine echte
+  # Relation "active_connections / max_connections". Ein Standard-
+  # Metrik-Alert kann keine Ratio zwischen zwei verschiedenen Metriken
+  # bilden. Fuer eine echte relative Schwelle waere ein log-/KQL-
+  # basierter Alert (azurerm_monitor_scheduled_query_rules_alert_v2)
+  # gegen die exportierten AllMetrics-Daten noetig -- das geht ueber
+  # den hier definierten Minimalstandard hinaus.
+}
+
+resource "azurerm_monitor_metric_alert" "connections_failed" {
+  name                = "alert-pg-connections-failed"
+  resource_group_name = "rg-monitoring"
+  scopes              = [data.azurerm_postgresql_flexible_server.this.id]
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "connections_failed"
+    aggregation      = "Total"
+    operator         = "GreaterThan"
+    threshold        = 5
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.pg.id
+  }
+}
