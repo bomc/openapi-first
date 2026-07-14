@@ -1089,3 +1089,30 @@ resource "azurerm_monitor_metric_alert" "connections_failed" {
     action_group_id = azurerm_monitor_action_group.pg.id
   }
 }
+
+
+
+Hier eine Übersicht, wo du die einzelnen deployten Terraform-Ressourcen im Azure Portal (oder per CLI) wiederfindest:
+
+| Terraform-Ressource | Wo im Portal | Was du dort siehst |
+|---|---|---|
+| `azurerm_postgresql_flexible_server_configuration` (autovacuum, log_*, pgbouncer) | Dein Postgres-Server → **Einstellungen → Server-Parameter** (Suche nach `metrics.autovacuum_diagnostics`, `log_connections` etc.) | Den aktuell gesetzten Wert – so verifizierst du, dass Terraform die Werte wirklich übernommen hat |
+| `azurerm_monitor_diagnostic_setting` | Dein Postgres-Server → **Überwachung → Diagnoseeinstellungen** (Diagnostic settings) | Den Namen deiner Diagnostic Setting (`pg-diagnostics-prod`), die aktivierten Kategorien und das Ziel (dein Log Analytics Workspace) |
+| Plattformmetriken (automatisch, unabhängig von Terraform) | Dein Postgres-Server → **Überwachung → Metriken** (Metrics Explorer) | `storage_percent`, `cpu_percent`, `is_db_alive` etc. sofort; Autovacuum-Metriken (`n_dead_tup_user_tables` etc.) erst nach bis zu 30 Minuten, da 30-Minuten-Erfassungsintervall |
+| Log-Daten (`PostgreSQLLogs`, `PostgreSQLFlexDatabaseXacts`) | Log Analytics Workspace (`log-pg-prod`) → **Protokolle** (Logs, KQL-Editor) | Die Tabelle `PGSQLServerLogs` (bestätigt, siehe Kapitel 3.3/3.4 im Dokument) für die Server-Logs. **Für `PostgreSQLFlexDatabaseXacts` kenne ich den exakten Tabellennamen nicht mit Sicherheit** – schau im Workspace links unter **Tabellen** nach Einträgen mit Präfix `PGSQL`, dort findest du den tatsächlichen Namen, statt dass ich ihn hier rate. |
+| `AllMetrics`-Export | Log Analytics Workspace → **Protokolle** | Tabelle `AzureMetrics` – dieselben Werte wie im Metrics Explorer, aber mit Historie über 30 Tage hinaus |
+| `azurerm_monitor_metric_alert` (alle 6) | Dein Postgres-Server → **Überwachung → Warnungen** oder global unter **Monitor → Warnungen** | Regelname, Status (aktiv/ausgelöst), letzte Auswertung |
+| `azurerm_monitor_action_group` | **Monitor → Warnungen → Aktionsgruppen** | Die konfigurierte E-Mail-Adresse; hier testest du am besten sofort per „Test-Benachrichtigung senden", ob die Zustellung funktioniert |
+| `azurerm_monitor_private_link_scoped_service` | Deine AMPLS-Ressource → **Konfigurieren → Azure Monitor-Ressourcen** | Deinen Log Analytics Workspace als verknüpfte Ressource in der Liste |
+| `internet_query_enabled = false` am Workspace | Log Analytics Workspace → **Netzwerkzugriffskonfiguration** | Ob "Öffentlicher Netzwerkzugriff für Abfragen" auf "Deaktiviert" bzw. "Nur ausgewählte Netzwerke" steht |
+
+**Praktischer erster Check-Ablauf, den ich empfehlen würde:**
+1. Server-Parameter prüfen (sind die `ON`/`on`-Werte wirklich angekommen?)
+2. Diagnoseeinstellungen-Blade am Server öffnen (ist die Setting da, zeigt sie „Aktiv"?)
+3. Ein paar Minuten warten, dann im Log Analytics Workspace `PGSQLServerLogs | take 10` ausführen – kommt überhaupt Log-Content an?
+4. Metrics Explorer öffnen, `is_db_alive` und `storage_percent` als Chart anzeigen
+5. In den Aktionsgruppen eine Testbenachrichtigung auslösen, um die Zustellkette zu verifizieren
+
+Ein Hinweis zur Erwartungshaltung bei den Logs: Zwischen Aktivierung der Diagnostic Setting und dem ersten sichtbaren Logeintrag in Log Analytics kann es **einige Minuten Verzögerung** geben – das ist normal, ich habe aber keine exakte, garantierte Zeitangabe dafür gefunden, also keine feste Wartezeit als "Fakt" nennen.
+
+Soll ich diesen Verifikations-Ablauf als kurzes neues Kapitel „Nach dem Deployment: Verifikation" ans Dokument anhängen?
