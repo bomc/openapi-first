@@ -26,6 +26,310 @@ bomc:
 ---
 
 
+# Architekturbeschreibung: Logging & Monitoring für Azure SQL Database
+
+Stand der Recherche: Juli 2026, basierend auf aktueller Microsoft-Learn-Dokumentation. Wo Informationen unsicher, unvollständig oder umgebungsabhängig sind, ist dies explizit gekennzeichnet. Diese Beschreibung gilt für **Azure SQL Database** (Single Database / Elastic Pool).
+
+---
+
+## 1. Grundprinzip: drei getrennte Datenpfade
+
+Azure SQL Database liefert Observability- und Sicherheitsdaten über **drei technisch und organisatorisch unabhängige Mechanismen**:
+
+| | Plattformmetriken (Azure Monitor Metrics) | Diagnostic Settings (Logs) | Auditing |
+|---|---|---|---|
+| Ressourcentyp/Namespace | `Microsoft.Sql/servers/databases` (bzw. `.../elasticpools`) | Diagnostic Setting am selben Ressourcentyp | Eigene Ressource `auditingSettings` am Server oder an der Datenbank |
+| Aktivierung | Automatisch aktiv | Muss explizit konfiguriert werden | Muss explizit konfiguriert werden – eigene Portal-Blade „Auditing", getrennt von den Diagnoseeinstellungen |
+| Ziel | Azure-Monitor-Metrikspeicher | Log Analytics Workspace, Storage Account, Event Hub | Storage Account, Log Analytics Workspace oder Event Hub |
+| Inhalt | Ressourcenverbrauch (CPU, DTU, Storage, Verbindungen …) | Performance-/Wartestatistiken, Query Store, Fehler, Blockaden | Sicherheitsrelevante Ereignisse: wer hat wann welche Abfrage/welches Login ausgeführt |
+| Typischer Zweck | Kurzfristiges operatives Monitoring, Kapazitätsplanung | Tiefergehende Performance-Diagnose, Fehleranalyse | Compliance, Security-Audit, forensische Nachvollziehbarkeit |
+
+**Wichtiger, oft übersehener Zusammenhang zwischen Diagnostic Settings und Auditing:** Wenn Auditing über die Auditing-Blade auf ein Log-Analytics- oder Event-Hub-Ziel konfiguriert wird, legt Azure im Hintergrund automatisch eine eigene Diagnostic Setting mit der Kategorie `SQLSecurityAuditEvents` an (Namensmuster `SQLSecurityAuditEvents_<GUID>`). Löscht man diese Diagnostic Setting manuell, versagt das Auditing **lautlos** – ohne Fehlermeldung, aber ohne weitere Audit-Daten. Microsoft empfiehlt explizit, einen Alert auf das Löschen dieser Diagnostic Setting einzurichten. Mehrere Community-Quellen berichten außerdem übereinstimmend, dass das manuelle Aktivieren der Kategorie `SQLSecurityAuditEvents` direkt in den Diagnoseeinstellungen – ohne den Umweg über die Auditing-Blade – **nicht** zu befüllten Audit-Daten führt (das ist keine Aussage, die ich in der offiziellen Microsoft-Dokumentation selbst so explizit gefunden habe, sondern eine übereinstimmende Beobachtung mehrerer unabhängiger Community-Quellen – ich kennzeichne sie deshalb als nicht offiziell verifiziert, aber plausibel). Für Auditing ist also die Auditing-Blade bzw. die entsprechende dedizierte Terraform-Ressource der vorgesehene Weg.
+
+---
+
+## 2. Baustein A: Plattformmetriken (Azure Monitor Metrics)
+
+### 2.1 Funktionsweise
+Der Ressourcenprovider `Microsoft.Sql/servers/databases` (für Elastic Pools: `Microsoft.Sql/servers/elasticpools`) emittiert automatisch Metriken direkt in den Azure-Monitor-Metrikspeicher – ohne Zutun des Nutzers, unabhängig von jeder Diagnostic-Settings-Konfiguration.
+
+- Die meisten Metriken werden im **1-Minuten-Takt (`PT1M`)** erfasst.
+- Backup-bezogene Größen (`full_backup_size_bytes`, `diff_backup_size_bytes`, `log_backup_size_bytes`, `snapshot_backup_size_bytes`) werden nur **täglich (`P1D`)** erfasst.
+- **Aufbewahrung vs. Abfragefenster:** Die Metrikdaten selbst werden bis zu **93 Tage** im Metrikspeicher vorgehalten. Ein einzelnes Diagramm im Metrics Explorer (Portal oder REST API) kann davon aber nur ein zusammenhängendes Zeitfenster von maximal **30 Tagen** gleichzeitig darstellen – eine reine Abfrage-/Darstellungsbeschränkung pro Chart, keine Reduktion der Speicherdauer. Die Daten außerhalb der letzten 30 Tage lassen sich durch Schwenken des Charts oder eine neue Abfrage mit anderem 30-Tage-Fenster erreichen. Für zusammenhängende Trend- oder Kapazitätsanalysen über mehr als 30 Tage empfiehlt sich der Export der Metriken über Diagnostic Settings (Kategorie `AllMetrics`) in einen Log Analytics Workspace.
+
+### 2.2 Wichtige Metrikkategorien
+
+Azure SQL Database unterscheidet zwei grundlegend verschiedene **Abrechnungs-/Kapazitätsmodelle** – DTU-basiert (gebündelte Ressourceneinheit) und vCore-basiert (granularer, mit separater CPU-/Speicher-Steuerung). Ein Teil der Metriken ist jeweils nur für eines der beiden Modelle relevant, ein anderer Teil nur für bestimmte Tarife (Serverless, Hyperscale, Data-Warehouse-Workloads).
+
+| Kategorie | Beispielmetriken | Bemerkung |
+|---|---|---|
+| Ressourcenverbrauch (DTU-Modell) | `dtu_consumption_percent`, `dtu_limit`, `dtu_used` | Nur relevant bei DTU-basierten Datenbanken |
+| Ressourcenverbrauch (vCore-Modell) | `cpu_percent`, `cpu_limit`, `cpu_used`, `sql_instance_cpu_percent`, `sql_instance_memory_percent` | Nur relevant bei vCore-basierten Datenbanken |
+| Storage | `storage`, `storage_percent`, `allocated_data_storage`, `xtp_storage_percent` (In-Memory OLTP) | `storage_percent` nicht anwendbar bei Hyperscale-Datenbanken |
+| I/O | `log_write_percent` (Log-IO), `physical_data_read_percent` (Data-IO) | Engpass-Indikatoren für I/O-lastige Workloads |
+| Verbindungen | `connection_successful`, `connection_failed` (Systemfehler), `connection_failed_user_error` (z. B. falsches Passwort), `sessions_count`, `sessions_percent`, `workers_percent` | `connection_failed` und `connection_failed_user_error` sind bewusst getrennte Metriken – wichtig für die Unterscheidung Infrastruktur- vs. Anwendungsproblem |
+| Verfügbarkeit | `availability` | Prozentsatz SLA-konformer Verfügbarkeit; pro 1-Minuten-Datenpunkt entweder 100 % (Verbindung(en) erfolgreich) oder 0 % (alle Verbindungen an Systemfehlern gescheitert) – Microsoft empfiehlt explizit die 1-Minuten-Granularität für eine korrekte SLA-Betrachtung |
+| Fehler/Sperren | `deadlock` | Nicht anwendbar bei Data-Warehouse-Workloads |
+| Tempdb | `tempdb_data_size`, `tempdb_log_size`, `tempdb_log_used_percent` | Relevant bei tempdb-intensiven Workloads (Sortierungen, temporäre Tabellen) |
+| Serverless-spezifisch | `app_cpu_percent`, `app_cpu_billed`, `app_memory_percent` | Nur bei Serverless-Tarif |
+| Backup-Speicher | `full_backup_size_bytes`, `diff_backup_size_bytes`, `log_backup_size_bytes`, `snapshot_backup_size_bytes` (Hyperscale) | Tägliches Sampling |
+| Data-Warehouse-spezifisch (Kategorie WorkloadManagement) | `wlg_active_queries`, `wlg_queued_queries`, `dwu_consumption_percent`, `cache_hit_percent` u. a. | Nur relevant, wenn die Datenbank als Data-Warehouse-Workload betrieben wird |
+
+*Hinweis:* Diese Auswahl ist kuratiert, nicht vollständig. Die verbindliche Gesamtliste inkl. exakter Aggregationstypen und Zeitgranularitäten steht in der Microsoft-Referenz „Supported metrics – Microsoft.Sql/servers/databases".
+
+### 2.3 Bekannte Einschränkung bei geringer Auslastung
+Microsoft dokumentiert ein Rundungsverhalten: Bei sehr niedriger Auslastung können Metrikwerte kleiner als 0,5 auf 0 gerundet werden, wodurch bei sehr kleinen/wenig genutzten Datenbanken oder Elastic Pools eine geringere tatsächliche Auslastung als real vorhanden angezeigt werden kann. Das ist bei der Interpretation von Metriken auf Testsystemen oder sehr kleinen SKUs zu beachten.
+
+### 2.4 Nutzung/Konsumenten
+- **Metrics Explorer** im Portal (Ad-hoc-Analyse)
+- **Azure Monitor Alerts** (schwellwertbasiert)
+- **Query Performance Insight**: eine in Azure SQL Database eingebaute Portal-Funktion, die direkt auf dem SQL-eigenen Query Store aufsetzt und Query-Tuning-Empfehlungen sowie Performance-Analysen liefert – funktioniert unabhängig von Diagnostic Settings, da sie nicht über Azure Monitor läuft
+- **Automatic Tuning / Datenbank-Advisor**: ebenfalls direkt im Portal integriert, liefert Empfehlungen (z. B. fehlende oder überflüssige Indizes) auf Basis interner Telemetrie – ebenfalls unabhängig von Diagnostic Settings nutzbar
+- **Export via `AllMetrics`** in Diagnostic Settings (Tabelle `AzureMetrics` im Log Analytics Workspace) für Trendanalysen über 30 Tage hinaus
+
+---
+
+## 3. Baustein B: Diagnostic Settings (Logs)
+
+### 3.1 Funktionsweise
+Diagnostic Settings sind eine separate Azure-Monitor-Ressource, die pro Datenbank (oder serverweit über die logische Servereinheit) angelegt werden muss. Ohne aktive Diagnostic Setting werden keine Logs erfasst.
+
+### 3.2 Verfügbare Log-Kategorien
+
+| Kategorie | Anzeigename | Inhalt |
+|---|---|---|
+| `SQLInsights` | SQL Insights | Grundlage für automatische Performance-Diagnose-Insights |
+| `AutomaticTuning` | Automatic tuning | Ereignisse rund um automatische Tuning-Aktionen (z. B. automatisch erstellte/entfernte Indizes) |
+| `QueryStoreRuntimeStatistics` | Query Store Runtime Statistics | Laufzeitstatistiken einzelner Queries aus dem SQL-eigenen Query Store |
+| `QueryStoreWaitStatistics` | Query Store Wait Statistics | Wartestatistiken je Query aus dem Query Store |
+| `Errors` | Errors | Datenbankfehler |
+| `DatabaseWaitStatistics` | Database Wait Statistics | Aggregierte Wartestatistiken auf Datenbankebene |
+| `Timeouts` | Timeouts | Zeitüberschreitungen |
+| `Blocks` | Blocks | Blockierungssituationen |
+| `Deadlocks` | Deadlocks | Deadlock-Ereignisse |
+| `ExecRequests` | Exec Requests | Laufende/abgeschlossene Ausführungsanfragen |
+| `RequestSteps` | Request Steps | Einzelschritte von Anfragen (v. a. relevant bei Data-Warehouse-Workloads) |
+| `SqlRequests` | Sql Requests | SQL-Anfragen |
+| `DmsWorkers` | Dms Workers | Data-Movement-Service-Worker (Data-Warehouse-Kontext) |
+| `SQLSecurityAuditEvents` | SQL Security Audit Event | Sicherheits-/Audit-Ereignisse – wird normalerweise nicht manuell hier aktiviert, sondern automatisch über die Auditing-Blade angelegt (siehe Kapitel 1 und 4) |
+| `DevOpsOperationsAudit` | Devops operations Audit Logs | Audit-Ereignisse zu Microsoft-Support-Operationen auf dem Server |
+| (Metrics-Kategorie) `AllMetrics` | – | Export der Plattformmetriken aus Kapitel 2 |
+
+### 3.3 Zielspeicher und Tabellenmodell
+
+Laut der aktuellen Microsoft-Referenztabelle (Dokument zuletzt aktualisiert im April 2025) landen bei Ziel Log Analytics Workspace **alle** Log-Kategorien in der generischen **`AzureDiagnostics`**-Tabelle, unterscheidbar über die Spalte `Category`:
+
+```kql
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.SQL"
+| where Category == "Errors"
+| where TimeGenerated > ago(1d)
+```
+
+*Einschränkung meiner Aussage:* Ich stütze mich hier auf die Spalte „Log table" der Microsoft-Referenztabelle, die für jede Kategorie `AzureDiagnostics` ausweist. Da sich Zieltabellenmodelle bei anderen Azure-Diensten in der Vergangenheit geändert haben, kann ich nicht ausschließen, dass sich das inzwischen ebenfalls geändert hat – das sollte vor der Implementierung anhand der aktuellen Diagnostic-Settings-Konfigurationsoberfläche geprüft werden.
+
+Bei Ziel **Event Hub**: für Streaming an externe SIEM-/Log-Management-Lösungen oder eigene Verarbeitung.
+Bei Ziel **Storage Account**: für kostengünstige Langzeitarchivierung/Compliance, keine native Abfragefunktion.
+
+### 3.4 Nutzung/Konsumenten
+- **Log Analytics / KQL** für Fehleranalyse, Wait-Statistik-Auswertung, Query-Store-Historie über die im Query Store selbst konfigurierte Aufbewahrung hinaus
+- **Workbooks**
+- Query Performance Insight (siehe Kapitel 2.4) arbeitet direkt auf dem Query Store, nicht auf den hierüber exportierten Logs – die beiden Wege ergänzen sich, sind aber technisch unabhängig
+
+---
+
+## 4. Baustein C: Auditing
+
+### 4.1 Funktionsweise
+Auditing ist eine eigenständige Azure-SQL-Funktion (Portal: Abschnitt „Security" → „Auditing", Ressourcentyp `Microsoft.Sql/servers/auditingSettings` bzw. `.../databases/auditingSettings`), keine Diagnostic Setting. Sie protokolliert sicherheitsrelevante Datenbankereignisse: erfolgreiche/fehlgeschlagene Logins, ausgeführte Abfragen und gespeicherte Prozeduren. Die Standard-Policy umfasst u. a. die Aktionsgruppen `BATCH_COMPLETED_GROUP`, `SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP` und `FAILED_DATABASE_AUTHENTICATION_GROUP`.
+
+Auditing kann auf **Server-Ebene** (gilt für alle aktuellen und künftigen Datenbanken auf dem logischen Server – von Microsoft als empfohlener Standardweg genannt) oder auf **Datenbank-Ebene** konfiguriert werden; beide können parallel aktiv sein und protokollieren dann unabhängig voneinander in ihre jeweiligen Ziele.
+
+Als Ziel stehen zur Wahl:
+- Azure Storage Account
+- Log Analytics Workspace (dabei automatische Diagnostic-Setting-Erzeugung, siehe Kapitel 1)
+- Event Hub
+
+### 4.2 Wichtige Betriebshinweise
+- **Performance-Optimierung vor Vollständigkeit:** Microsoft dokumentiert ausdrücklich, dass Auditing auf Verfügbarkeit und Performance der Datenbank hin optimiert ist – bei sehr hoher Aktivität oder hoher Netzwerklast können einzelne Audit-Ereignisse **nicht** aufgezeichnet werden. Für ein forensisch lückenloses Audit-Log ist das relevant.
+- **Verzögerung:** Eine Community-Quelle berichtet von einer Verzögerung von bis zu rund zwei Stunden, bis Security-Audit-Events in Log Analytics sichtbar werden. Das ist keine von mir bei Microsoft offiziell bestätigte Zeitangabe, sondern stammt aus einer Community-Quelle – ich nenne sie trotzdem, weil sie für die Erwartungshaltung bei der Fehlersuche relevant ist, markiere sie aber ausdrücklich als nicht offiziell verifiziert.
+- **Stille Fehlerzustände:** Wird die automatisch angelegte Diagnostic Setting (`SQLSecurityAuditEvents_<GUID>`) gelöscht, versagt Auditing ohne sichtbare Fehlermeldung. Microsoft empfiehlt hier explizit einen Alert auf Löschungen von Diagnostic Settings (Activity-Log-Alert).
+- **Read-Only-Replikate:** Auditing wird auf Lesereplikaten automatisch mit aktiviert.
+- **Sensible Daten:** In Kombination mit Data Classification protokolliert Auditing zusätzlich ein Feld `data_sensitivity_information`, das die Sensitivitätskennzeichnung der zurückgegebenen Daten enthält – relevant für die Nachverfolgung des Zugriffs auf klassifizierte Spalten.
+
+---
+
+## 5. Architekturübersicht (Textdiagramm)
+
+```
+                    +-------------------------------------------+
+                    |  Azure SQL Database                        |
+                    |  (Microsoft.Sql/servers/databases)          |
+                    +-------+---------------+---------------+----+
+                            |               |               |
+              (immer aktiv)|  (opt-in)     |  (opt-in,      |
+                            |               |   eigene Blade)|
+                            v               v                v
+                +--------------------+ +------------------+ +---------------------+
+                | Azure Monitor       | | Diagnostic        | | Auditing             |
+                | Metrics              | | Settings (Logs)   | | (auditingSettings)   |
+                | 93 Tage Speicherung, | | -> AzureDiagnostics| | -> erzeugt intern    |
+                | 30-Tage-Chart-Fenster| |    (generische     | |    eine Diagnostic   |
+                +---------+------------+ |    Tabelle)        | |    Setting mit       |
+                          |              +---------+----------+ |    SQLSecurityAudit- |
+                          |                        |            |    Events            |
+                          v                        v            +----------+-----------+
+                  Metrics Explorer,        Log Analytics /                 |
+                  Alerts, Query            KQL, Workbooks                  v
+                  Performance Insight,                            Storage Account /
+                  Automatic Tuning                                 Log Analytics /
+                  (portal-nativ, ohne                                Event Hub
+                   Diagnostic Settings)
+```
+
+---
+
+## 6. Zusammenfassende Entscheidungslogik
+
+| Anforderung | Empfohlener Pfad |
+|---|---|
+| CPU/DTU/Storage-Überwachung, einfache Schwellwert-Alerts | Plattformmetriken, kein Diagnostic Setting nötig |
+| Verfügbarkeits-Monitoring | Metrik `availability`, 1-Minuten-Granularität |
+| Analyse langsamer Queries im Portal, ohne Log-Analytics-Setup | Query Performance Insight (nativ, kein Diagnostic Setting nötig) |
+| Historische Query-Store-Auswertung über die native Query-Store-Aufbewahrung hinaus, KQL-Analysen | Diagnostic Settings mit `QueryStoreRuntimeStatistics`/`QueryStoreWaitStatistics` |
+| Deadlock-/Blocking-Analyse | Diagnostic Settings mit `Deadlocks`, `Blocks`, `DatabaseWaitStatistics` |
+| Compliance-/Security-Audit (wer hat was ausgeführt) | Auditing-Blade bzw. die dedizierte Auditing-Ressource konfigurieren, nicht die Diagnoseeinstellungen direkt |
+| Microsoft-Support-Operationen nachvollziehen | Diagnostic Settings mit `DevOpsOperationsAudit` |
+
+---
+
+## 7. Empfohlene Mindeststandards: Start vs. Produktivbetrieb
+
+**Wichtiger Hinweis vorab:** Microsoft veröffentlicht keinen offiziellen, verbindlichen „Minimal-Standard" für Logging, Monitoring und Auditing bei Azure SQL Database. Was folgt, ist meine fachliche Einschätzung/Empfehlung auf Basis der in Kapitel 1–6 beschriebenen, dokumentierten Mechanismen – keine von Microsoft vorgegebene Checkliste. Konkrete Schwellwerte sind begründete Vorschläge, keine Herstellervorgaben, und je nach Workload anzupassen.
+
+### 7.1 Minimalstandard zum Start (Dev/Test/erste Inbetriebnahme)
+
+| Bereich | Empfehlung |
+|---|---|
+| Plattformmetriken | Nichts zu konfigurieren – automatisch aktiv. Bei Bedarf ad hoc über Metrics Explorer ansehen. |
+| Diagnostic Settings | Optional, kann in dieser Phase entfallen. Falls doch gewünscht: eine einzige Diagnostic Setting mit Ziel Log Analytics Workspace, nur Kategorie `Errors`. |
+| Auditing | Nicht zwingend nötig in dieser Phase. |
+| Alerts | Minimal zwei einfache Alerts: `availability` (Verfügbarkeit) und je nach Abrechnungsmodell `storage_percent` bzw. `dtu_consumption_percent`/`cpu_percent`. |
+
+### 7.2 Minimalstandard für eine Produktivdatenbank
+
+Das ist die untere Grenze dessen, was ich für eine produktiv genutzte Datenbank als verantwortbar ansehe – nicht die vollständige „Best Practice"-Ausstattung. Query-Store-Diagnose-Kategorien, Data-Warehouse-spezifische Metriken oder eine feingranulare Auditing-Aktionsgruppen-Konfiguration gehen darüber hinaus und sind je nach Anforderung zusätzlich sinnvoll.
+
+**a) Plattformmetriken – Alerts mit Action Group**
+
+Alerts ohne Benachrichtigungsziel sind wirkungslos: mindestens eine **Action Group** (E-Mail, Teams, PagerDuty o. ä.), gebunden an folgende Alerts:
+
+| Metrik | Grund |
+|---|---|
+| `availability` | Basis-Verfügbarkeit |
+| `storage_percent` (bzw. bei Hyperscale eine geeignete Alternative, da dort nicht anwendbar) | Speicherengpässe frühzeitig erkennen |
+| `cpu_percent` (vCore) bzw. `dtu_consumption_percent` (DTU) | Anhaltend hohe Last als Frühindikator für Performance-Probleme |
+| `sessions_percent` bzw. `workers_percent` | Drohende Erschöpfung von Sessions/Workern |
+| `connection_failed` | Deutet auf Konfigurations- oder Kapazitätsprobleme hin |
+| `deadlock` | Wiederkehrende Deadlocks als Hinweis auf Anwendungs-/Schema-Probleme |
+
+**b) Diagnostic Settings – minimal produktiv-tauglicher Umfang**
+
+- Ziel: Log Analytics Workspace
+- Minimal sinnvolle Log-Kategorien: `Errors`, `Deadlocks`, `Blocks`, `DatabaseWaitStatistics`
+- Nicht zwingend Teil des Minimalstandards, aber naheliegende nächste Ausbaustufe: `QueryStoreRuntimeStatistics`, `QueryStoreWaitStatistics` für tiefergehende Query-Performance-Diagnose
+- `AllMetrics`-Export in denselben Workspace: sinnvoll, sobald Trendanalysen über mehr als 30 Tage gebraucht werden
+
+**c) Auditing – für Produktivsysteme Teil des Minimalstandards**
+
+Anders als in der Startphase stufe ich Auditing für eine produktive Datenbank als Minimalstandard ein, nicht als optionales Extra:
+- Server-Level-Auditing aktivieren, Ziel Log Analytics Workspace
+- Standard-Aktionsgruppen belassen (`BATCH_COMPLETED_GROUP`, `SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP`, `FAILED_DATABASE_AUTHENTICATION_GROUP`)
+- Zusätzlich einen **Activity-Log-Alert auf das Löschen der automatisch erzeugten Diagnostic Setting** (`SQLSecurityAuditEvents_*`) einrichten, da Auditing sonst lautlos ausfällt (siehe Kapitel 4.2)
+
+### 7.3 Kurzer Vergleich
+
+| | Start-Minimalstandard | Produktiv-Minimalstandard |
+|---|---|---|
+| Diagnostic Settings | optional | verpflichtend (`Errors`, `Deadlocks`, `Blocks`, `DatabaseWaitStatistics`) |
+| Auditing | nicht nötig | verpflichtend, Server-Level, mit Löschungs-Alert |
+| Alerts | 2 (Verfügbarkeit, Storage/Auslastung) | 6 (siehe Tabelle 7.2a), mit Action Group |
+
+---
+
+## 8. Konfiguration als Code: Terraform
+
+**Grundsätzliche Antwort: Ja**, sämtliche in dieser Architektur beschriebenen Bausteine lassen sich über den `azurerm`-Provider deklarativ verwalten.
+
+### 8.1 Relevante Terraform-Ressourcen
+
+| Zweck | Terraform-Ressource | Bemerkung |
+|---|---|---|
+| Logischer SQL-Server | `azurerm_mssql_server` | Basisressource |
+| Datenbank | `azurerm_mssql_database` | SKU (DTU/vCore), Storage, etc. |
+| Diagnostic Setting (Baustein B) | `azurerm_monitor_diagnostic_setting` | `enabled_log { category = "..." }` je Log-Kategorie, `enabled_metric { category = "AllMetrics" }` |
+| Log Analytics Workspace | `azurerm_log_analytics_workspace` | Ziel für Diagnostic Settings und Auditing |
+| Auditing – Server-Ebene | `azurerm_mssql_server_extended_auditing_policy` | Aktiviert Auditing für alle Datenbanken auf dem Server |
+| Auditing – Datenbank-Ebene | `azurerm_mssql_database_extended_auditing_policy` | Aktiviert Auditing für eine einzelne Datenbank |
+| Metrikbasierte Alerts | `azurerm_monitor_metric_alert` | Für die Schwellwert-Alerts aus Kapitel 7.2a |
+| Alert auf Löschung der Diagnostic Setting | `azurerm_monitor_activity_log_alert` | Für den in Kapitel 7.2c empfohlenen Schutzmechanismus |
+
+### 8.2 Bekannte Einschränkung bei Auditing mit Log-Analytics-Ziel
+
+Für **Storage-Account-Ziele** funktioniert `azurerm_mssql_server_extended_auditing_policy`/`azurerm_mssql_database_extended_auditing_policy` unmittelbar über die eigenen Ressourcenattribute. Für ein **Log-Analytics-Ziel** ist die Lage laut mehreren, über mehrere Jahre verteilten GitHub-Issues zum `azurerm`-Provider unübersichtlicher: Die reine Aktivierung über `log_monitoring_enabled = true` an der Extended-Auditing-Policy-Ressource verknüpft den Log Analytics Workspace in der Praxis nicht zuverlässig im Portal sichtbar. Ein in einem GitHub-Issue dokumentiertes, funktionierendes Muster kombiniert beide Ressourcen:
+
+```hcl
+resource "azurerm_mssql_server_extended_auditing_policy" "main" {
+  server_id               = azurerm_mssql_server.this.id
+  retention_in_days       = 30
+  log_monitoring_enabled  = true
+}
+
+resource "azurerm_monitor_diagnostic_setting" "sql_audit" {
+  name                       = "sql-audit-to-log-analytics"
+  target_resource_id         = "${azurerm_mssql_server.this.id}/databases/master"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
+
+  enabled_log {
+    category = "SQLSecurityAuditEvents"
+  }
+
+  depends_on = [azurerm_mssql_server_extended_auditing_policy.main]
+}
+```
+
+*Einschränkung meiner Aussage:* Dieses Muster stammt aus einem öffentlichen, mit „Bug" gekennzeichneten GitHub-Issue zum `azurerm`-Provider (Stand August 2024) und nicht aus der offiziellen Terraform-Registry-Dokumentation als der vorgesehene Standardweg. Ob dieses Verhalten in der aktuell von euch verwendeten Provider-Version noch genauso zutrifft, kann ich nicht mit Sicherheit sagen – das sollte vor der Umsetzung in einer Testumgebung verifiziert werden.
+
+### 8.3 Was ich dazu nicht mit Sicherheit sagen kann
+
+- Ob **jede** in Kapitel 3.2 gelistete Log-Kategorie zum aktuellen Zeitpunkt vollständig und ohne Provider-Lücken über `azurerm` abbildbar ist, kann ich nicht abschließend bestätigen.
+- Konkrete Mindest-Versionsanforderungen an den `azurerm`-Provider nenne ich hier bewusst nicht, da sich das häufig ändert und ich das nicht zuverlässig aktuell verifizieren kann.
+
+---
+
+## 9. Offene Punkte / bewusst nicht beantwortet
+
+- **Konkrete Kostenmodelle** für Diagnostic-Settings-Export und Auditing-Speicherung: keine gesicherten aktuellen Preisinformationen vorhanden – Azure-Preisrechner konsultieren.
+- **Ob das in Kapitel 3.3 beschriebene, ausschließliche `AzureDiagnostics`-Tabellenmodell zum Zeitpunkt der Umsetzung noch aktuell ist** – das ist eine Momentaufnahme, keine dauerhafte Garantie.
+- **Exakte Verzögerungszeit bei Auditing-Events** (Kapitel 4.2) – nur aus einer Community-Quelle, nicht offiziell von Microsoft bestätigt.
+- **Terraform-Verhalten für Auditing mit Log-Analytics-Ziel** (Kapitel 8.2) – auf Basis eines GitHub-Issues, nicht der offiziellen Registry-Dokumentation als Standardweg.
+
+## 10. Quellen (Microsoft Learn, abgerufen Juli 2026)
+
+- Monitoring data reference for Azure SQL Database: https://learn.microsoft.com/en-us/azure/azure-sql/database/monitoring-sql-database-azure-monitor-reference?view=azuresql
+- Supported metrics – Microsoft.Sql/servers/databases: https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-sql-servers-databases-metrics
+- Supported log categories – Microsoft.Sql/servers/databases: https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-logs/microsoft-sql-servers-databases-logs
+- Monitoring and performance tuning – Azure SQL Database & Managed Instance: https://learn.microsoft.com/en-us/azure/azure-sql/database/monitor-tune-overview?view=azuresql
+- Auditing – Azure SQL Database and Azure Synapse Analytics (Übersicht): https://learn.microsoft.com/en-us/azure/azure-sql/database/auditing-overview?view=azuresql
+- Set up Auditing – Azure SQL Database & Azure Synapse Analytics: https://learn.microsoft.com/en-us/azure/azure-sql/database/auditing-setup?view=azuresql
+- Explore server and database audit (Microsoft Learn Training): https://learn.microsoft.com/training/modules/implement-compliance-controls-sensitive-data/3-explore-server-and-database-audit
+- Terraform-Ressource `azurerm_mssql_server_extended_auditing_policy`: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/mssql_server_extended_auditing_policy
+- Terraform-Ressource `azurerm_mssql_database_extended_auditing_policy`: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/mssql_database_extended_auditing_policy
+- GitHub-Issue zu Auditing mit Log-Analytics-Ziel (Terraform): https://github.com/hashicorp/terraform-provider-azurerm/issues/27025
+
+
+---
+
 # Architekturbeschreibung: Logging & Monitoring für Azure Database for PostgreSQL – Flexible Server
 
 Stand der Recherche: Juli 2026, basierend auf aktueller Microsoft-Learn-Dokumentation. Wo Informationen unsicher, unvollständig oder umgebungsabhängig sind, ist dies explizit gekennzeichnet.
