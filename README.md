@@ -44,6 +44,17 @@ Azure SQL Database liefert Observability- und Sicherheitsdaten über **drei tech
 | Inhalt | Ressourcenverbrauch (CPU, DTU, Storage, Verbindungen …) | Performance-/Wartestatistiken, Query Store, Fehler, Blockaden | Sicherheitsrelevante Ereignisse: wer hat wann welche Abfrage/welches Login ausgeführt |
 | Typischer Zweck | Kurzfristiges operatives Monitoring, Kapazitätsplanung | Tiefergehende Performance-Diagnose, Fehleranalyse | Compliance, Security-Audit, forensische Nachvollziehbarkeit |
 
+**Zur Zeile „Ressourcentyp/Namespace":** Damit ist der vollständige Azure-Resource-Manager-Typ-Pfad gemeint, über den Azure eine Ressource eindeutig identifiziert – nicht nur ein Anzeigename. Er setzt sich zusammen aus dem Resource Provider (`Microsoft.Sql`), dem logischen SQL-Server als Zwischenebene (`/servers`) und der einzelnen Datenbank darunter (`/databases`), zusammen also `Microsoft.Sql/servers/databases`. Ein konkreter Resource-ID-Pfad sieht entsprechend so aus:
+
+```
+/subscriptions/<sub-id>/resourceGroups/<rg-name>/providers/Microsoft.Sql/servers/<servername>/databases/<datenbankname>
+```
+
+Das ist praktisch relevant, weil:
+- **Metric Alerts** (`azurerm_monitor_metric_alert`, Kapitel 8) das Feld `metric_namespace` exakt mit diesem Wert befüllen müssen, sonst findet Azure die Metrik nicht.
+- der **logische Server eine eigene Zwischenebene** ist – eine Azure SQL Database existiert nie für sich allein, sondern immer unterhalb eines Servers. Diagnostic Settings und Auditing lassen sich auf **beiden Ebenen getrennt** konfigurieren: serverweit für alle Datenbanken, oder pro einzelner Datenbank (siehe die getrennten Terraform-Ressourcen `azurerm_mssql_server_extended_auditing_policy` vs. `azurerm_mssql_database_extended_auditing_policy` in Kapitel 8.1).
+- **Elastic Pools einen eigenen, separaten Namespace** haben (`Microsoft.Sql/servers/elasticpools`) – bei Nutzung von Elastic Pools statt einzelner Datenbanken ist für die Pool-Metriken dieser andere Ressourcentyp anzusprechen, nicht `.../databases`.
+
 **Wichtiger, oft übersehener Zusammenhang zwischen Diagnostic Settings und Auditing:** Wenn Auditing über die Auditing-Blade auf ein Log-Analytics- oder Event-Hub-Ziel konfiguriert wird, legt Azure im Hintergrund automatisch eine eigene Diagnostic Setting mit der Kategorie `SQLSecurityAuditEvents` an (Namensmuster `SQLSecurityAuditEvents_<GUID>`). Löscht man diese Diagnostic Setting manuell, versagt das Auditing **lautlos** – ohne Fehlermeldung, aber ohne weitere Audit-Daten. Microsoft empfiehlt explizit, einen Alert auf das Löschen dieser Diagnostic Setting einzurichten. Mehrere Community-Quellen berichten außerdem übereinstimmend, dass das manuelle Aktivieren der Kategorie `SQLSecurityAuditEvents` direkt in den Diagnoseeinstellungen – ohne den Umweg über die Auditing-Blade – **nicht** zu befüllten Audit-Daten führt (das ist keine Aussage, die ich in der offiziellen Microsoft-Dokumentation selbst so explizit gefunden habe, sondern eine übereinstimmende Beobachtung mehrerer unabhängiger Community-Quellen – ich kennzeichne sie deshalb als nicht offiziell verifiziert, aber plausibel). Für Auditing ist also die Auditing-Blade bzw. die entsprechende dedizierte Terraform-Ressource der vorgesehene Weg.
 
 ---
